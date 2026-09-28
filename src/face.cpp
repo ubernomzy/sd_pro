@@ -3,8 +3,8 @@
 // Layout (240 x 240, black background). The case hides the bottom pixel or
 // two, so nothing is drawn below y = 230.
 //
-//   Hello                      Mon       <- greeting / day
-//   Neehal             28 Jul 2026       <- name / date
+//   Neehal                     Mon       <- name / day
+//                      28 Jul 2026       <- date
 //   10:24 AM                 (icon)      <- time / weather icon
 //   (pin) Sydney                22°C     <- city / temperature
 //                              Sunny     <- condition
@@ -20,9 +20,9 @@
 #include <string.h>
 
 #include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/FreeSans12pt7b.h>
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
-#include <Fonts/FreeSansBold18pt7b.h>
 #include <Fonts/FreeSansBold24pt7b.h>
 
 namespace {
@@ -309,14 +309,13 @@ void drawCompass(Adafruit_GFX &g, int16_t cx, int16_t cy, int16_t r, int degrees
 // ---------------------------------------------------------------------------
 
 void drawHeader(Adafruit_GFX &g, const FaceData &d) {
-  textAt(g, &FreeSans9pt7b, GREY, LEFT, 20, d.greeting);
-  textAt(g, &FreeSansBold18pt7b, NAME_BLUE, LEFT - 1, 48, d.name);
+  textAt(g, &FreeSansBold12pt7b, NAME_BLUE, LEFT, 24, d.name);
   if (d.timeValid) {
-    textRight(g, &FreeSansBold9pt7b, WHITE, RIGHT, 20, d.dayName);
-    textRight(g, &FreeSans9pt7b, WHITE, RIGHT, 40, d.date);
+    textRight(g, &FreeSansBold12pt7b, WHITE, RIGHT, 24, d.dayName);
+    textRight(g, &FreeSans12pt7b, WHITE, RIGHT, 48, d.date);
   } else {
-    textRight(g, &FreeSans9pt7b, DIM, RIGHT, 20, "Syncing");
-    textRight(g, &FreeSans9pt7b, DIM, RIGHT, 40, "time...");
+    textRight(g, &FreeSans12pt7b, DIM, RIGHT, 24, "Syncing");
+    textRight(g, &FreeSans12pt7b, DIM, RIGHT, 48, "time...");
   }
 }
 

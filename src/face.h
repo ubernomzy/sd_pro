@@ -33,7 +33,6 @@ enum CardPage : uint8_t {
 
 struct FaceData {
   // Fixed text (set in main.cpp)
-  const char *greeting;   // "Hello"
   const char *name;       // "Neehal"
   const char *city;       // "Sydney"
 

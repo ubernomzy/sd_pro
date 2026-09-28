@@ -4,7 +4,7 @@ Custom firmware for the SD Pro WiFi weather clock (ESP8266, 4MB flash,
 1.54" 240x240 ST7789 LCD). Forked from JUZIPi-tech/SD_PRO, which only
 publishes compiled firmware. The seller's files are kept in `original/`.
 
-## Current version: 0.8.0 (spaceman)
+## Current version: 0.8.1 (bigger date)
 
 Progress so far:
 
@@ -51,13 +51,14 @@ Progress so far:
   converts it on the PC into 16 greys, run-length packed
   (`src/spaceman_data.h`, 26KB), so the clock needs no GIF decoder and
   almost no memory. Firmware is about 458KB
+- v0.8.1: "Hello" is gone; the name is smaller (12pt instead of 18pt)
+  and the day and date are bigger (12pt instead of 9pt)
 
 ## Personalise it
 
 The top of `src/main.cpp` has a settings block:
 
 ```cpp
-static const char *FACE_GREETING = "Hello";
 static const char *FACE_NAME = "Neehal";
 static const char *FACE_CITY = "Sydney";
 static const char *WEATHER_LATITUDE = "-33.8688";
@@ -114,7 +115,7 @@ in `src/main.cpp`; the status page can switch back to the generic table.
    `secrets.h` is in `.gitignore` and must never be committed. (Weather
    needs no key.)
 2. Build: `pio run -e sdpro`
-3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 458KB).
+3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 456KB).
    The build fails on purpose if it goes over 500KB (`check_size.py`).
 
 ## Flash

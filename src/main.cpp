@@ -28,6 +28,7 @@
 // v0.8.0: the seller's spaceman animation (their /0.gif) plays right of the
 //         bottom card. Converted on the PC by tools/make_spaceman.py into
 //         spaceman_data.h (26KB), so the clock needs no GIF decoder.
+// v0.8.1: "Hello" removed; the name is smaller and the day and date bigger.
 //
 // Size rule: an update is written beside the running firmware, so each
 // version must stay under ~500KB (about half the 1MB firmware area). The
@@ -68,7 +69,6 @@
 // Clock face settings: change these to personalise the clock
 // ---------------------------------------------------------------------------
 
-static const char *FACE_GREETING = "Hello";
 static const char *FACE_NAME = "Neehal";
 static const char *FACE_CITY = "Sydney";
 
@@ -792,7 +792,6 @@ void setup() {
   startWebServer();
   configTime(TIMEZONE, "pool.ntp.org", "time.google.com");
 
-  face.greeting = FACE_GREETING;
   face.name = FACE_NAME;
   face.city = FACE_CITY;
   face.weatherMessage = "loading...";

@@ -4,7 +4,10 @@
 // v0.2.0: display pin scan over 72 DC/reset/SPI-mode combinations.
 //         Nothing appeared: the display ignored every combination.
 // v0.3.0: uses the pins found by disassembling the seller's firmware,
-//         including chip-select on GPIO15, which v0.1/v0.2 never drove.
+//         including chip-select on GPIO15. Still blank.
+// v0.4.0: sends the seller's own ST7789 startup table (panel voltages, gate
+//         lines, gamma) and fixes the SPI mode setting: on the ESP8266,
+//         SPI_MODE3 is 0x11, so passing the number 3 actually gave mode 1.
 //
 // Pins from the seller's firmware (display setup code at 0x4021a24b):
 //   CS = GPIO15, DC = GPIO0, RST = GPIO2, backlight = GPIO5 (on when LOW)
@@ -53,19 +56,69 @@ struct DisplayConfig {
   uint8_t blActiveLow;   // 1 = backlight turns on when the pin is LOW
   uint8_t spiMode;       // 0 with a chip-select pin; 3 for boards without one
   uint8_t rotation;      // 0-3
+  uint8_t initTable;     // 1 = seller's startup table, 0 = library's generic one
 };
 
-// "SDP2": changed from "SDP1" when the CS pin was added, so settings saved
-// by v0.1/v0.2 (a different layout) are ignored instead of misread.
-static const uint32_t CONFIG_MAGIC = 0x53445032;
-static const DisplayConfig DEFAULT_CONFIG = {CONFIG_MAGIC, 0, 2, 15, 5, 1, 0, 0};
+// Bumped whenever the layout changes ("SDP1" v0.1-0.2, "SDP2" v0.3,
+// "SDP3" v0.4) so older saved settings are ignored instead of misread.
+static const uint32_t CONFIG_MAGIC = 0x53445033;
+static const DisplayConfig DEFAULT_CONFIG = {CONFIG_MAGIC, 0, 2, 15, 5, 1, 0, 0, 1};
+
+// The seller's ST7789 startup sequence, copied byte for byte from their
+// firmware (file offset 0x6a308 in both v1.0.4 and v1.0.6). Format is the
+// Adafruit library's: command count, then per command: command byte,
+// argument count (+0x80 if a delay follows), arguments, delay in ms
+// (255 = 500ms).
+static const uint8_t SELLER_INIT[] PROGMEM = {
+  20,
+  0x11, 0x80, 255,                              // SLPOUT, wait 500ms
+  0x3A, 0x81, 0x55, 10,                         // COLMOD: 16-bit colour
+  0x36, 0x01, 0x00,                             // MADCTL
+  0x2A, 0x04, 0x00, 0x00, 0x00, 0xF0,           // CASET 0-240
+  0x2B, 0x04, 0x00, 0x00, 0x00, 0xF0,           // RASET 0-240
+  0xB2, 0x05, 0x0C, 0x0C, 0x00, 0x33, 0x33,     // PORCTRL
+  0xB7, 0x01, 0x35,                             // GCTRL
+  0xBB, 0x01, 0x1F,                             // VCOMS
+  0xC0, 0x01, 0x2C,                             // LCMCTRL
+  0xC2, 0x01, 0x01,                             // VDVVRHEN
+  0xC3, 0x01, 0x12,                             // VRHS
+  0xC4, 0x01, 0x20,                             // VDVS
+  0xC6, 0x01, 0x0F,                             // FRCTRL2: 60Hz
+  0xD0, 0x02, 0xA4, 0xA1,                       // PWCTRL1
+  0xE0, 0x0E, 0xD0, 0x08, 0x11, 0x08, 0x0C, 0x15, 0x39, 0x33, 0x50, 0x36,
+              0x13, 0x14, 0x29, 0x2D,           // positive gamma
+  0xE1, 0x0E, 0xD0, 0x08, 0x10, 0x08, 0x06, 0x06, 0x39, 0x44, 0x51, 0x0B,
+              0x16, 0x14, 0x2F, 0x31,           // negative gamma
+  0xE4, 0x03, 0x1D, 0x00, 0x00,                 // GATECTRL: 240 gate lines
+  0x21, 0x80, 10,                               // INVON
+  0x13, 0x80, 10,                               // NORON
+  0x29, 0x80, 255,                              // DISPON, wait 500ms
+};
+
+// Adafruit_ST7789 keeps displayInit() protected; this exposes it.
+class ClockDisplay : public Adafruit_ST7789 {
+ public:
+  using Adafruit_ST7789::Adafruit_ST7789;
+  void runInitTable(const uint8_t *table) { displayInit(table); }
+};
+
+// Settings store SPI mode as 0-3, but the ESP8266 SPI library uses
+// SPI_MODE0 = 0x00, SPI_MODE1 = 0x01, SPI_MODE2 = 0x10, SPI_MODE3 = 0x11.
+uint8_t spiModeConstant(uint8_t mode) {
+  switch (mode) {
+    case 1: return SPI_MODE1;
+    case 2: return SPI_MODE2;
+    case 3: return SPI_MODE3;
+    default: return SPI_MODE0;
+  }
+}
 
 DisplayConfig cfg;
 bool usingSavedConfig = false;
 
 ESP8266WebServer server(80);
 ESP8266HTTPUpdateServer updateServer;
-Adafruit_ST7789 *tft = nullptr;
+ClockDisplay *tft = nullptr;
 bool apMode = false;
 
 // ---------------------------------------------------------------------------
@@ -79,7 +132,7 @@ static const uint8_t MODE_CANDIDATES[] = {0, 3};
 static const int8_t RST_CANDIDATES[] = {2, -1};
 static const int8_t SCAN_DC = 0;
 
-static const uint32_t SCAN_STEP_MS = 3000;
+static const uint32_t SCAN_STEP_MS = 4000;  // seller's table alone takes ~1s
 static const int MAX_STEPS = 16;
 
 struct ScanStep {
@@ -153,7 +206,7 @@ void loadConfig() {
   EEPROM.get(0, cfg);
   usingSavedConfig = cfg.magic == CONFIG_MAGIC && isSafePin(cfg.dc) &&
                      cfg.dc >= 0 && isSafePin(cfg.rst) && isSafePin(cfg.cs) && isSafePin(cfg.bl) &&
-                     cfg.spiMode <= 3 && cfg.rotation <= 3;
+                     cfg.spiMode <= 3 && cfg.rotation <= 3 && cfg.initTable <= 1;
   if (!usingSavedConfig) cfg = DEFAULT_CONFIG;  // nothing is written until you press Save
 }
 
@@ -177,11 +230,11 @@ void setBacklight(bool on) {
 // (Re)creates the display driver with the given pins.
 // The driver lives in a fixed memory slot rather than being new'd and
 // deleted each time, so a long scan can't fragment the ESP8266's small heap.
-alignas(Adafruit_ST7789) static uint8_t tftStorage[sizeof(Adafruit_ST7789)];
+alignas(ClockDisplay) static uint8_t tftStorage[sizeof(ClockDisplay)];
 
 void startDisplay(int8_t dc, int8_t rst, int8_t cs, uint8_t mode) {
   if (tft) {
-    tft->~Adafruit_ST7789();
+    tft->~ClockDisplay();
     tft = nullptr;
   }
   // With a CS pin, the driver raises and lowers it around every transfer,
@@ -191,8 +244,9 @@ void startDisplay(int8_t dc, int8_t rst, int8_t cs, uint8_t mode) {
     pinMode(15, OUTPUT);
     digitalWrite(15, LOW);
   }
-  tft = new (tftStorage) Adafruit_ST7789(cs, dc, rst);
-  tft->init(240, 240, mode);
+  tft = new (tftStorage) ClockDisplay(cs, dc, rst);
+  tft->init(240, 240, spiModeConstant(mode));  // pins, reset pulse, generic table
+  if (cfg.initTable) tft->runInitTable(SELLER_INIT);
   tft->setRotation(cfg.rotation);
   tft->setSPISpeed(27000000);  // conservative; ST7789 is rated for more
 }
@@ -360,8 +414,9 @@ void handleRoot() {
             "</p><p>Watch the clock. When a big number appears, note it and press Stop.</p>"
             "<form method='post' action='/scan/stop'><button>Stop</button></form>";
   } else {
-    html += F("<p>Tries 8 variants of the seller's pins (chip-select, SPI mode, reset), "
-              "3 seconds each. When one works, the clock shows a big step number.</p>"
+    html += F("<p>Tries 8 variants of the seller's pins (chip-select, SPI mode, reset) "
+              "with the startup table chosen below, about 4 seconds each. "
+              "When one works, the clock shows a big step number.</p>"
               "<form method='post' action='/scan/start' style='display:inline'><button>Start scan</button></form>");
     if (scanInterruptedAt >= 0) {
       html += "<form method='post' action='/scan/start?from=" + String(scanInterruptedAt + 1) +
@@ -406,6 +461,8 @@ void handleRoot() {
           String(cfg.spiMode) + "'> (0-3)</td></tr>";
   html += "<tr><td>Rotation</td><td><input name='rot' type='number' min='0' max='3' value='" +
           String(cfg.rotation) + "'> (0-3)</td></tr>";
+  html += "<tr><td>Startup table</td><td><input name='init' type='number' min='0' max='1' value='" +
+          String(cfg.initTable) + "'> (1 = seller's, 0 = generic)</td></tr>";
   html += F("</table><button type='submit'>Save and reboot</button></form>"
             "<h3>Actions</h3>"
             "<form method='post' action='/test' style='display:inline'><button>Redraw test screen</button></form>"
@@ -427,6 +484,7 @@ void handleConfig() {
   next.blActiveLow = server.arg("bllow").toInt() ? 1 : 0;
   next.spiMode = constrain(server.arg("spi").toInt(), 0, 3);
   next.rotation = constrain(server.arg("rot").toInt(), 0, 3);
+  next.initTable = server.arg("init").toInt() ? 1 : 0;
 
   if (next.dc < 0 || !isSafePin(next.dc) || !isSafePin(next.rst) || !isSafePin(next.cs) ||
       !isSafePin(next.bl)) {
@@ -584,8 +642,9 @@ void setup() {
   readScanMarker();
   buildScanSteps();
   loadConfig();
-  Serial.printf("Display pins: DC=%d RST=%d CS=%d BL=%d (active %s) SPI mode %d\n", cfg.dc,
-                cfg.rst, cfg.cs, cfg.bl, cfg.blActiveLow ? "LOW" : "HIGH", cfg.spiMode);
+  Serial.printf("Display pins: DC=%d RST=%d CS=%d BL=%d (active %s) SPI mode %d, %s table\n",
+                cfg.dc, cfg.rst, cfg.cs, cfg.bl, cfg.blActiveLow ? "LOW" : "HIGH", cfg.spiMode,
+                cfg.initTable ? "seller's" : "generic");
 
   // Network and update page come first, so a display problem can never
   // stop the clock from accepting the next firmware.

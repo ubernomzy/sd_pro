@@ -4,7 +4,7 @@ Custom firmware for the SD Pro WiFi weather clock (ESP8266, 4MB flash,
 1.54" 240x240 ST7789 LCD). Forked from JUZIPi-tech/SD_PRO, which only
 publishes compiled firmware. The seller's files are kept in `original/`.
 
-## Current version: 0.3.0 (seller's pins, with chip-select)
+## Current version: 0.4.0 (seller's startup table)
 
 Progress so far:
 
@@ -14,7 +14,12 @@ Progress so far:
 - Disassembling the seller's firmware showed the display setup code
   (at `0x4021a24b`) drives chip-select on GPIO15, which we never drove,
   and contains the ST7789 startup table (at file offset `0x6a30b`)
-- v0.3.0 uses those exact pins, with a short 8-step scan as a fallback
+- v0.3.0 used those exact pins: still blank
+- The pin order in the seller's code matches the Adafruit display library,
+  so the seller uses the same library; the difference is their startup
+  table, which sets panel voltages and gate lines the generic one doesn't
+- v0.4.0 sends the seller's exact table and fixes an SPI mode bug
+  (on the ESP8266, `SPI_MODE3` is `0x11`, so "mode 3" had meant mode 1)
 
 ## Features
 
@@ -39,7 +44,9 @@ Display pins, from the seller's firmware:
 | Reset     | 2    | Seller code: pulses GPIO2 HIGH-LOW-HIGH    |
 | Backlight | 5    | Confirmed on the clock (on when LOW)       |
 
-Display chip: ST7789, 240x240 (startup command table found in the image).
+Display chip: ST7789, 240x240. The seller's startup table (file offset
+`0x6a308`, identical in v1.0.4 and v1.0.6) is copied into `SELLER_INIT`
+in `src/main.cpp`; the status page can switch back to the generic table.
 
 ## Build
 

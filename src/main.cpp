@@ -1,12 +1,15 @@
 // SD Pro clock - custom firmware
 //
 // v0.1.0: WiFi, password-protected update page, status page, test screen.
-// v0.2.0: adds a display pin scan. The scan cycles through every sensible
-//         combination of DC pin, reset pin and SPI mode, drawing a large
-//         step number on the screen for each. When a number appears on the
-//         clock, that step's pins are the right ones.
+// v0.2.0: display pin scan over 72 DC/reset/SPI-mode combinations.
+//         Nothing appeared: the display ignored every combination.
+// v0.3.0: uses the pins found by disassembling the seller's firmware,
+//         including chip-select on GPIO15, which v0.1/v0.2 never drove.
 //
-// Confirmed on the real clock so far: backlight = GPIO5, on when LOW.
+// Pins from the seller's firmware (display setup code at 0x4021a24b):
+//   CS = GPIO15, DC = GPIO0, RST = GPIO2, backlight = GPIO5 (on when LOW)
+//   SPI data = GPIO13, SPI clock = GPIO14 (hardware SPI)
+// Display chip: ST7789 (its startup command table is in the seller's image).
 
 #include <Arduino.h>
 #include <new>
@@ -45,14 +48,17 @@ struct DisplayConfig {
   uint32_t magic;
   int8_t dc;             // data/command pin
   int8_t rst;            // reset pin (-1 = not connected)
+  int8_t cs;             // chip-select pin (-1 = not connected)
   int8_t bl;             // backlight pin (-1 = not connected)
   uint8_t blActiveLow;   // 1 = backlight turns on when the pin is LOW
-  uint8_t spiMode;       // ST7789 boards without a CS pin usually need mode 3
+  uint8_t spiMode;       // 0 with a chip-select pin; 3 for boards without one
   uint8_t rotation;      // 0-3
 };
 
-static const uint32_t CONFIG_MAGIC = 0x53445031;  // "SDP1"
-static const DisplayConfig DEFAULT_CONFIG = {CONFIG_MAGIC, 0, 2, 5, 1, 3, 0};
+// "SDP2": changed from "SDP1" when the CS pin was added, so settings saved
+// by v0.1/v0.2 (a different layout) are ignored instead of misread.
+static const uint32_t CONFIG_MAGIC = 0x53445032;
+static const DisplayConfig DEFAULT_CONFIG = {CONFIG_MAGIC, 0, 2, 15, 5, 1, 0, 0};
 
 DisplayConfig cfg;
 bool usingSavedConfig = false;
@@ -66,24 +72,20 @@ bool apMode = false;
 // Pin scan
 // ---------------------------------------------------------------------------
 
-// Candidate pins. GPIO5 is the confirmed backlight; GPIO13/14 are the SPI
-// bus; GPIO6-11 belong to the flash chip and are never touched.
-// GPIO16 goes last: on some boards it is wired to the chip's reset.
-static const int8_t DC_CANDIDATES[] = {0, 2, 4, 12, 15, 16};
-static const int8_t RST_CANDIDATES[] = {-1, 2, 0, 4, 12, 15, 16};
-static const uint8_t MODE_CANDIDATES[] = {3, 0};
-
-// Pins held LOW during each step, in case one is the display's chip-select.
-// GPIO12 is left alone because SPI.begin() claims it, and GPIO16 because
-// pulling it low could reset the ESP8266.
-static const int8_t HOLD_LOW_CANDIDATES[] = {0, 2, 4, 15};
+// With the seller's pins known, the scan only tries a few variants around
+// them: chip-select driven or not, SPI mode 0 or 3, reset driven or not.
+static const int8_t CS_CANDIDATES[] = {15, -1};
+static const uint8_t MODE_CANDIDATES[] = {0, 3};
+static const int8_t RST_CANDIDATES[] = {2, -1};
+static const int8_t SCAN_DC = 0;
 
 static const uint32_t SCAN_STEP_MS = 3000;
-static const int MAX_STEPS = 96;
+static const int MAX_STEPS = 16;
 
 struct ScanStep {
   int8_t dc;
   int8_t rst;
+  int8_t cs;
   uint8_t mode;
 };
 
@@ -106,11 +108,11 @@ int scanInterruptedAt = -1;
 
 void buildScanSteps() {
   scanStepCount = 0;
-  for (uint8_t mode : MODE_CANDIDATES) {
-    for (int8_t dc : DC_CANDIDATES) {
+  for (int8_t cs : CS_CANDIDATES) {
+    for (uint8_t mode : MODE_CANDIDATES) {
       for (int8_t rst : RST_CANDIDATES) {
-        if (rst == dc || scanStepCount >= MAX_STEPS) continue;
-        scanSteps[scanStepCount++] = {dc, rst, mode};
+        if (scanStepCount >= MAX_STEPS) continue;
+        scanSteps[scanStepCount++] = {SCAN_DC, rst, cs, mode};
       }
     }
   }
@@ -150,7 +152,7 @@ void loadConfig() {
   EEPROM.begin(64);
   EEPROM.get(0, cfg);
   usingSavedConfig = cfg.magic == CONFIG_MAGIC && isSafePin(cfg.dc) &&
-                     cfg.dc >= 0 && isSafePin(cfg.rst) && isSafePin(cfg.bl) &&
+                     cfg.dc >= 0 && isSafePin(cfg.rst) && isSafePin(cfg.cs) && isSafePin(cfg.bl) &&
                      cfg.spiMode <= 3 && cfg.rotation <= 3;
   if (!usingSavedConfig) cfg = DEFAULT_CONFIG;  // nothing is written until you press Save
 }
@@ -177,24 +179,22 @@ void setBacklight(bool on) {
 // deleted each time, so a long scan can't fragment the ESP8266's small heap.
 alignas(Adafruit_ST7789) static uint8_t tftStorage[sizeof(Adafruit_ST7789)];
 
-void startDisplay(int8_t dc, int8_t rst, uint8_t mode, bool holdOthersLow) {
+void startDisplay(int8_t dc, int8_t rst, int8_t cs, uint8_t mode) {
   if (tft) {
     tft->~Adafruit_ST7789();
     tft = nullptr;
   }
-  SPI.begin();
-  if (holdOthersLow) {
-    for (int8_t pin : HOLD_LOW_CANDIDATES) {
-      if (pin == dc || pin == rst) continue;
-      pinMode(pin, OUTPUT);
-      digitalWrite(pin, LOW);
-    }
+  // With a CS pin, the driver raises and lowers it around every transfer,
+  // which is what the seller's firmware does on GPIO15. Without one, hold
+  // GPIO15 low so a previous step can't leave the display deselected.
+  if (cs < 0 && dc != 15 && rst != 15) {
+    pinMode(15, OUTPUT);
+    digitalWrite(15, LOW);
   }
-  // CS = -1: these clocks usually tie the display's chip-select to ground.
-  tft = new (tftStorage) Adafruit_ST7789(-1, dc, rst);
+  tft = new (tftStorage) Adafruit_ST7789(cs, dc, rst);
   tft->init(240, 240, mode);
   tft->setRotation(cfg.rotation);
-  tft->setSPISpeed(40000000);
+  tft->setSPISpeed(27000000);  // conservative; ST7789 is rated for more
 }
 
 String currentIp() {
@@ -252,8 +252,8 @@ void showScanStep(int step) {
   const ScanStep &s = scanSteps[step];
   scanCurrent = step;
   writeScanMarker(step);  // if the next lines reset the chip, we'll know which step did it
-  Serial.printf("Scan step %d: DC=%d RST=%d mode=%d\n", step, s.dc, s.rst, s.mode);
-  startDisplay(s.dc, s.rst, s.mode, true);
+  Serial.printf("Scan step %d: DC=%d RST=%d CS=%d mode=%d\n", step, s.dc, s.rst, s.cs, s.mode);
+  startDisplay(s.dc, s.rst, s.cs, s.mode);
   drawScanStep(step);
   writeScanMarker(-1);
 }
@@ -324,7 +324,8 @@ String pinInput(const char *name, int value) {
 
 String stepDescription(int step) {
   const ScanStep &s = scanSteps[step];
-  return "DC " + String(s.dc) + ", reset " + String(s.rst) + ", SPI mode " + String(s.mode);
+  return "DC " + String(s.dc) + ", reset " + String(s.rst) + ", CS " + String(s.cs) +
+         ", SPI mode " + String(s.mode);
 }
 
 void redirectHome() {
@@ -359,8 +360,8 @@ void handleRoot() {
             "</p><p>Watch the clock. When a big number appears, note it and press Stop.</p>"
             "<form method='post' action='/scan/stop'><button>Stop</button></form>";
   } else {
-    html += F("<p>Cycles through every likely pin combination, 3 seconds each (about 4 minutes). "
-              "When the right one is reached, the clock shows a big step number.</p>"
+    html += F("<p>Tries 8 variants of the seller's pins (chip-select, SPI mode, reset), "
+              "3 seconds each. When one works, the clock shows a big step number.</p>"
               "<form method='post' action='/scan/start' style='display:inline'><button>Start scan</button></form>");
     if (scanInterruptedAt >= 0) {
       html += "<form method='post' action='/scan/start?from=" + String(scanInterruptedAt + 1) +
@@ -371,7 +372,7 @@ void handleRoot() {
       html += "<p>Last step shown: " + String(scanCurrent) + " (" + stepDescription(scanCurrent) + ")</p>";
     }
     html += F("<form method='post' action='/scan/show'>Step number: "
-              "<input name='step' type='number' min='0' max='95'> "
+              "<input name='step' type='number' min='0' max='15'> "
               "<button>Show this step</button> "
               "<button formaction='/scan/save'>Save this step's pins and reboot</button></form>"
               "<p><a href='/scan/table'>List of all steps</a></p>");
@@ -391,11 +392,13 @@ void handleRoot() {
 
   // ----- Manual pins -----
   html += F("</table><h3>Display pins</h3>"
-            "<p>Use -1 for not connected. Data (GPIO13) and clock (GPIO14) are fixed. "
+            "<p>Defaults are the pins found in the seller's firmware. Use -1 for not "
+            "connected. Data (GPIO13) and clock (GPIO14) are fixed. "
             "Saving reboots the clock.</p>"
             "<form method='post' action='/config'><table>");
   html += "<tr><td>DC pin</td><td>" + pinInput("dc", cfg.dc) + "</td></tr>";
   html += "<tr><td>Reset pin</td><td>" + pinInput("rst", cfg.rst) + "</td></tr>";
+  html += "<tr><td>Chip-select pin</td><td>" + pinInput("cs", cfg.cs) + "</td></tr>";
   html += "<tr><td>Backlight pin</td><td>" + pinInput("bl", cfg.bl) + "</td></tr>";
   html += "<tr><td>Backlight on when LOW</td><td><input name='bllow' type='number' min='0' max='1' value='" +
           String(cfg.blActiveLow) + "'> (1 = yes)</td></tr>";
@@ -419,12 +422,14 @@ void handleConfig() {
   DisplayConfig next = cfg;
   next.dc = server.arg("dc").toInt();
   next.rst = server.arg("rst").toInt();
+  next.cs = server.arg("cs").toInt();
   next.bl = server.arg("bl").toInt();
   next.blActiveLow = server.arg("bllow").toInt() ? 1 : 0;
   next.spiMode = constrain(server.arg("spi").toInt(), 0, 3);
   next.rotation = constrain(server.arg("rot").toInt(), 0, 3);
 
-  if (next.dc < 0 || !isSafePin(next.dc) || !isSafePin(next.rst) || !isSafePin(next.bl)) {
+  if (next.dc < 0 || !isSafePin(next.dc) || !isSafePin(next.rst) || !isSafePin(next.cs) ||
+      !isSafePin(next.bl)) {
     server.send(400, "text/plain",
                 "Rejected: allowed pins are -1, 0, 1, 2, 3, 4, 5, 12, 15, 16 (DC can't be -1).");
     return;
@@ -483,6 +488,7 @@ void handleScanSave() {
   const ScanStep &s = scanSteps[step];
   cfg.dc = s.dc;
   cfg.rst = s.rst;
+  cfg.cs = s.cs;
   cfg.spiMode = s.mode;
   saveConfig();
   server.send(200, "text/html",
@@ -501,11 +507,11 @@ void handleScanTable() {
             "<style>body{font-family:sans-serif;max-width:560px;margin:24px auto;padding:0 16px}"
             "td,th{padding:2px 14px 2px 0;text-align:left}</style></head><body>"
             "<p><a href='/'>Back</a></p><h3>Pin scan steps</h3><table>"
-            "<tr><th>Step</th><th>DC</th><th>Reset</th><th>SPI mode</th></tr>");
+            "<tr><th>Step</th><th>DC</th><th>Reset</th><th>CS</th><th>SPI mode</th></tr>");
   for (int i = 0; i < scanStepCount; i++) {
     const ScanStep &s = scanSteps[i];
     html += "<tr><td>" + String(i) + "</td><td>" + String(s.dc) + "</td><td>" + String(s.rst) +
-            "</td><td>" + String(s.mode) + "</td></tr>";
+            "</td><td>" + String(s.cs) + "</td><td>" + String(s.mode) + "</td></tr>";
   }
   html += F("</table></body></html>");
   server.send(200, "text/html", html);
@@ -514,7 +520,7 @@ void handleScanTable() {
 void handleTest() {
   if (!requireLogin()) return;
   stopScan();
-  startDisplay(cfg.dc, cfg.rst, cfg.spiMode, false);
+  startDisplay(cfg.dc, cfg.rst, cfg.cs, cfg.spiMode);
   drawTestScreen();
   redirectHome();
 }
@@ -578,8 +584,8 @@ void setup() {
   readScanMarker();
   buildScanSteps();
   loadConfig();
-  Serial.printf("Display pins: DC=%d RST=%d BL=%d (active %s) SPI mode %d\n", cfg.dc,
-                cfg.rst, cfg.bl, cfg.blActiveLow ? "LOW" : "HIGH", cfg.spiMode);
+  Serial.printf("Display pins: DC=%d RST=%d CS=%d BL=%d (active %s) SPI mode %d\n", cfg.dc,
+                cfg.rst, cfg.cs, cfg.bl, cfg.blActiveLow ? "LOW" : "HIGH", cfg.spiMode);
 
   // Network and update page come first, so a display problem can never
   // stop the clock from accepting the next firmware.
@@ -588,7 +594,7 @@ void setup() {
   startNetworkUpdates();
 
   setBacklight(true);
-  startDisplay(cfg.dc, cfg.rst, cfg.spiMode, false);
+  startDisplay(cfg.dc, cfg.rst, cfg.cs, cfg.spiMode);
   drawTestScreen();
   Serial.println("Ready.");
 }

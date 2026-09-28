@@ -4,14 +4,17 @@ Custom firmware for the SD Pro WiFi weather clock (ESP8266, 4MB flash,
 1.54" 240x240 ST7789 LCD). Forked from JUZIPi-tech/SD_PRO, which only
 publishes compiled firmware. The seller's files are kept in `original/`.
 
-## Current version: 0.2.0 (display pin scan)
+## Current version: 0.3.0 (seller's pins, with chip-select)
 
 Progress so far:
 
 - v0.1.0 runs on the clock: joins WiFi, update page and status page work
 - Backlight confirmed: GPIO5, on when LOW
-- Display still blank with DC 0 / reset 2 (SPI modes 3 and 0) and with no reset pin
-- v0.2.0 adds a pin scan on the status page to find the right DC/reset pins
+- v0.2.0 scanned 72 DC/reset/SPI-mode combinations: display stayed blank
+- Disassembling the seller's firmware showed the display setup code
+  (at `0x4021a24b`) drives chip-select on GPIO15, which we never drove,
+  and contains the ST7789 startup table (at file offset `0x6a30b`)
+- v0.3.0 uses those exact pins, with a short 8-step scan as a fallback
 
 ## Features
 
@@ -21,20 +24,22 @@ Progress so far:
 - Status page at `/` showing IP, memory, firmware size and display pins
 - Draws "Hello Hal", colour bars and the IP address on the screen
 - Display pins can be changed on the status page without rebuilding
-- Pin scan (v0.2.0): cycles through 72 DC/reset/SPI-mode combinations,
-  3 seconds each, showing a big step number on screen. `/scan/table`
-  lists the pins for every step
+- Pin scan: tries 8 variants of the seller's pins (chip-select on/off,
+  SPI mode 0/3, reset on/off), showing a big step number on screen.
+  `/scan/table` lists the pins for every step
 
-Display pins are guesses until confirmed on the real clock:
+Display pins, from the seller's firmware:
 
-| Signal    | GPIO | Status                   |
-|-----------|------|--------------------------|
-| MOSI      | 13   | Fixed hardware SPI       |
-| SCLK      | 14   | Fixed hardware SPI       |
-| DC        | 0    | Guess                    |
-| Reset     | 2    | Guess                    |
-| Backlight | 5    | Confirmed (on when LOW)  |
-| CS        | none | Guess (tied to ground)   |
+| Signal    | GPIO | Evidence                                   |
+|-----------|------|--------------------------------------------|
+| MOSI      | 13   | Hardware SPI                               |
+| SCLK      | 14   | Hardware SPI                               |
+| CS        | 15   | Seller code: `pinMode(15, OUTPUT)`, HIGH   |
+| DC        | 0    | Seller code: `pinMode(0, OUTPUT)`, HIGH    |
+| Reset     | 2    | Seller code: pulses GPIO2 HIGH-LOW-HIGH    |
+| Backlight | 5    | Confirmed on the clock (on when LOW)       |
+
+Display chip: ST7789, 240x240 (startup command table found in the image).
 
 ## Build
 

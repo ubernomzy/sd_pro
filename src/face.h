@@ -22,6 +22,15 @@ enum WeatherIcon : uint8_t {
   ICON_MIST,
 };
 
+// The bottom card cycles through these, in this order.
+enum CardPage : uint8_t {
+  CARD_WIND,
+  CARD_PRESSURE,
+  CARD_UV,
+  CARD_FEELS_LIKE,
+  CARD_PAGE_COUNT,
+};
+
 struct FaceData {
   // Fixed text (set in main.cpp)
   const char *greeting;   // "Hello"
@@ -35,7 +44,7 @@ struct FaceData {
   char dayName[4];        // "Mon"
   char date[16];          // "28 Jul 2026"
 
-  // Weather (from OpenWeatherMap)
+  // Weather (from Open-Meteo)
   bool weatherValid;
   const char *weatherMessage;  // shown instead of weather when not valid
   int tempC;
@@ -43,8 +52,12 @@ struct FaceData {
   WeatherIcon icon;
   int windKmh;
   int windDeg;            // 0-359, direction the wind comes from; -1 = unknown
-  char comfort[12];       // "Pleasant"
-  bool comfortGood;       // green card when true, amber otherwise
+  int pressureHpa;        // sea-level pressure
+  float uvIndex;
+  int feelsLikeC;
+
+  // Which card page is showing
+  CardPage cardPage;
 };
 
 // Clears the screen and draws everything.
@@ -53,8 +66,8 @@ void drawFace(Adafruit_GFX &gfx, const FaceData &d);
 // Redraws only the time (flicker-free), for the once-a-minute update.
 void drawFaceTime(Adafruit_GFX &gfx, const FaceData &d);
 
-// Picks a comfort label ("Pleasant", "Cool", ...) from temperature and humidity.
-void describeComfort(int tempC, int humidity, char *label, size_t labelSize, bool &good);
+// Redraws only the bottom card, for switching pages.
+void drawFaceCard(Adafruit_GFX &gfx, const FaceData &d);
 
 // 8-point compass name ("N", "NE", ...) for a wind direction in degrees.
 const char *compassPoint(int degrees);

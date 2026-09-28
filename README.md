@@ -4,7 +4,7 @@ Custom firmware for the SD Pro WiFi weather clock (ESP8266, 4MB flash,
 1.54" 240x240 ST7789 LCD). Forked from JUZIPi-tech/SD_PRO, which only
 publishes compiled firmware. The seller's files are kept in `original/`.
 
-## Current version: 0.5.0 (clock face)
+## Current version: 0.6.0 (rotating weather card)
 
 Progress so far:
 
@@ -31,6 +31,13 @@ Progress so far:
   OpenWeatherMap over HTTPS (icon, temperature, condition, wind speed and
   direction, comfort). Network uploads from PlatformIO and `sdpro.local`
   were removed to keep the firmware under 500KB
+- v0.6.0: the comfort card and country name are gone; the bottom card
+  rotates every 5 seconds between wind (speed + compass), pressure
+  (hPa + dial), UV index (level + colour scale) and feels-like
+  temperature (vs actual). Weather now comes from
+  [Open-Meteo](https://open-meteo.com/): free for non-commercial use, no
+  API key, data licensed CC BY 4.0 (credited on the status page).
+  OpenWeatherMap's free feed has no UV index
 
 ## Personalise it
 
@@ -40,7 +47,9 @@ The top of `src/main.cpp` has a settings block:
 static const char *FACE_GREETING = "Hello";
 static const char *FACE_NAME = "Neehal";
 static const char *FACE_CITY = "Sydney";
-static const char *WEATHER_QUERY = "Sydney,AU";
+static const char *WEATHER_LATITUDE = "-33.8688";
+static const char *WEATHER_LONGITUDE = "151.2093";
+static const uint32_t CARD_PAGE_MS = 5000;
 static const char *TIMEZONE = "AEST-10AEDT,M10.1.0,M4.1.0/3";
 ```
 
@@ -48,7 +57,8 @@ The layout itself is in `src/face.cpp` (positions, colours, fonts, icons).
 
 ## Features
 
-- Clock face: name, date, time, weather, wind, comfort
+- Clock face: name, date, time, weather, and a card rotating between wind,
+  pressure, UV index and feels-like temperature
 - Joins your 2.4GHz home WiFi. If it can't within 20 seconds, it opens a
   recovery hotspot `SDPro-Recovery` at http://192.168.4.1
 - Password-protected firmware update page at `/update` (user `admin`)
@@ -84,9 +94,9 @@ in `src/main.cpp`; the status page can switch back to the generic table.
 ## Build
 
 1. Copy `include/secrets.example.h` to `include/secrets.h` and fill in
-   your WiFi name, WiFi password, update password, recovery password and
-   (optional) OpenWeatherMap key. `secrets.h` is in `.gitignore` and must
-   never be committed.
+   your WiFi name, WiFi password, update password and recovery password.
+   `secrets.h` is in `.gitignore` and must never be committed. (Weather
+   needs no key.)
 2. Build: `pio run -e sdpro`
 3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 490KB).
    The build fails on purpose if it goes over 500KB (`check_size.py`).

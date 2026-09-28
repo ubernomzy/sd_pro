@@ -8,9 +8,9 @@
 //   10:24 AM                 (icon)      <- time / weather icon
 //   (pin) Sydney                22°C     <- city / temperature
 //                              Sunny     <- condition
-//   [ wind  18 km/h | compass ] [ leaf ] <- wind card / comfort card
-//   [ Wind speed    |   NE    ] [Pleasant]
-//                                [Climate ]
+//   [ icon  value unit | dial ]          <- rotating card: wind, pressure,
+//   [ Label            |      ]             UV index, feels like
+//   [      o o o o            ]          <- page dots
 
 #include "face.h"
 
@@ -46,16 +46,16 @@ constexpr uint16_t MOON_PALE = rgb(235, 230, 200);
 constexpr uint16_t CLOUD_GREY = rgb(200, 205, 215);
 constexpr uint16_t RAIN_BLUE = rgb(80, 160, 255);
 
-constexpr uint16_t CARD_BLUE_FILL = rgb(6, 14, 30);
-constexpr uint16_t CARD_BLUE_EDGE = rgb(35, 95, 170);
-constexpr uint16_t CARD_GREEN_FILL = rgb(6, 24, 14);
-constexpr uint16_t CARD_GREEN_EDGE = rgb(45, 170, 85);
-constexpr uint16_t LEAF_GREEN = rgb(70, 205, 95);
-constexpr uint16_t LEAF_VEIN = rgb(20, 90, 40);
-constexpr uint16_t CARD_AMBER_FILL = rgb(28, 18, 4);
-constexpr uint16_t CARD_AMBER_EDGE = rgb(190, 130, 30);
-constexpr uint16_t LEAF_AMBER = rgb(235, 170, 50);
-constexpr uint16_t LEAF_AMBER_VEIN = rgb(110, 70, 10);
+constexpr uint16_t CARD_FILL = rgb(6, 14, 30);
+constexpr uint16_t CARD_EDGE = rgb(35, 95, 170);
+constexpr uint16_t WARM_ORANGE = rgb(255, 140, 40);
+constexpr uint16_t COOL_BLUE = rgb(90, 170, 255);
+constexpr uint16_t THERMO_RED = rgb(240, 80, 60);
+
+// UV index bands (WHO): Low 0-2, Moderate 3-5, High 6-7, Very high 8-10, Extreme 11+
+constexpr uint16_t UV_COLOURS[] = {rgb(80, 200, 90), rgb(240, 210, 40), rgb(255, 140, 0),
+                                   rgb(230, 50, 50), rgb(170, 90, 230)};
+constexpr const char *UV_LEVELS[] = {"Low", "Moderate", "High", "Very high", "Extreme"};
 
 // ---------------------------------------------------------------------------
 // Layout
@@ -75,13 +75,17 @@ constexpr int16_t TIME_BASELINE = 40;  // inside the canvas
 constexpr int16_t WEATHER_ICON_X = 205;
 constexpr int16_t WEATHER_ICON_Y = 72;
 
+// The rotating card. Left of the divider: icon, value, label. Right: a dial.
+constexpr int16_t CARD_X = 4;
 constexpr int16_t CARD_Y = 150;
+constexpr int16_t CARD_W = 148;
 constexpr int16_t CARD_H = 80;
-constexpr int16_t WIND_CARD_X = 4;
-constexpr int16_t WIND_CARD_W = 148;
-constexpr int16_t COMFORT_CARD_X = 156;
-constexpr int16_t COMFORT_CARD_W = 80;
-constexpr int16_t WIND_DIVIDER_X = 112;
+constexpr int16_t CARD_DIVIDER_X = 112;
+constexpr int16_t CARD_DIAL_X = CARD_DIVIDER_X + (CARD_X + CARD_W - CARD_DIVIDER_X) / 2;
+constexpr int16_t CARD_VALUE_X = CARD_X + 44;
+constexpr int16_t CARD_VALUE_BASELINE = CARD_Y + 32;
+constexpr int16_t CARD_LABEL_BASELINE = CARD_Y + 60;
+constexpr int16_t CARD_DOTS_Y = CARD_Y + CARD_H - 8;
 
 // ---------------------------------------------------------------------------
 // Text helpers
@@ -133,6 +137,32 @@ void thickLine(Adafruit_GFX &g, float x0, float y0, float x1, float y1, uint16_t
   } else {
     g.drawLine(lroundf(x0) + 1, lroundf(y0), lroundf(x1) + 1, lroundf(y1), c);
   }
+}
+
+// Temperature like "22°C" in FreeSansBold12pt, with a hand-drawn degree
+// sign (the fonts are ASCII only). Returns the width it takes up.
+int16_t temperatureWidth(Adafruit_GFX &g, int value) {
+  char number[8];
+  snprintf(number, sizeof(number), "%d", value);
+  int16_t x1, cx1;
+  uint16_t w, cw;
+  measure(g, &FreeSansBold12pt7b, number, x1, w);
+  measure(g, &FreeSansBold12pt7b, "C", cx1, cw);
+  return (x1 + (int16_t)w) + 9 + (cx1 + (int16_t)cw);
+}
+
+// Draws it with the ink starting at x; returns the x where it ends.
+int16_t drawTemperature(Adafruit_GFX &g, int16_t x, int16_t baseline, int value, uint16_t colour) {
+  char number[8];
+  snprintf(number, sizeof(number), "%d", value);
+  int16_t x1;
+  uint16_t w;
+  measure(g, &FreeSansBold12pt7b, number, x1, w);
+  int16_t numberEnd = x + x1 + (int16_t)w;
+  textAt(g, &FreeSansBold12pt7b, colour, x, baseline, number);
+  g.drawCircle(numberEnd + 4, baseline - 15, 2, colour);
+  g.drawCircle(numberEnd + 4, baseline - 15, 3, colour);
+  return textAt(g, &FreeSansBold12pt7b, colour, numberEnd + 9, baseline, "C");
 }
 
 // ---------------------------------------------------------------------------
@@ -231,26 +261,20 @@ void drawWindIcon(Adafruit_GFX &g, int16_t x, int16_t y) {
   }
 }
 
-// Leaf, filled, pointing up-right, about 24 x 24, centred at (cx, cy).
-void drawLeaf(Adafruit_GFX &g, int16_t cx, int16_t cy, uint16_t fill, uint16_t vein) {
-  // A lens shape (two overlapping circles) along a 45-degree axis.
-  const float halfLength = 11.0f, halfWidth = 5.5f;
-  const float radius = (halfLength * halfLength + halfWidth * halfWidth) / (2 * halfWidth);
-  const float offset = radius - halfWidth;
-  const float k = 0.70710678f;
-  for (int dy = -12; dy <= 12; dy++) {
-    for (int dx = -12; dx <= 12; dx++) {
-      float u = (dx - dy) * k;  // along the leaf (up-right)
-      float v = (dx + dy) * k;  // across the leaf
-      float a = v - offset, b = v + offset;
-      if (u * u + a * a <= radius * radius && u * u + b * b <= radius * radius) {
-        g.drawPixel(cx + dx, cy + dy, fill);
-      }
-    }
-  }
-  // Centre vein and a short stem out of the bottom-left tip.
-  g.drawLine(cx - 7, cy + 7, cx + 6, cy - 6, vein);
-  thickLine(g, cx - 8, cy + 8, cx - 12, cy + 12, fill);
+// Small pressure gauge, about 28 x 20, top-left at (x, y).
+void drawGaugeIcon(Adafruit_GFX &g, int16_t x, int16_t y) {
+  const int16_t cx = x + 14, cy = y + 18;
+  for (int t = 0; t < 2; t++) g.drawCircleHelper(cx, cy, 13 - t, 0x1 | 0x2, ACCENT_BLUE);
+  g.drawFastHLine(cx - 13, cy, 27, ACCENT_BLUE);
+  thickLine(g, cx, cy, cx + 7, cy - 8, WHITE);
+  g.fillCircle(cx, cy, 2, WHITE);
+}
+
+// Thermometer, about 12 x 24, top-left at (x, y).
+void drawThermometer(Adafruit_GFX &g, int16_t x, int16_t y) {
+  g.drawRoundRect(x + 3, y, 7, 18, 3, GREY);
+  g.fillCircle(x + 6, y + 19, 5, THERMO_RED);
+  g.fillRect(x + 5, y + 7, 3, 12, THERMO_RED);
 }
 
 // Compass ring with a direction arrow.
@@ -308,68 +332,159 @@ void drawWeather(Adafruit_GFX &g, const FaceData &d) {
   }
   drawWeatherIcon(g, d.icon, WEATHER_ICON_X, WEATHER_ICON_Y);
 
-  // Temperature with a hand-drawn degree sign (the fonts are ASCII only).
-  char number[8];
-  snprintf(number, sizeof(number), "%d", d.tempC);
-  int16_t x1, cx1;
-  uint16_t w, cw;
-  measure(g, &FreeSansBold12pt7b, number, x1, w);
-  measure(g, &FreeSansBold12pt7b, "C", cx1, cw);
-  const int16_t degreeGap = 9;
-  int16_t cX = RIGHT - (cx1 + (int16_t)cw) + 1;
-  int16_t numberX = cX - degreeGap - (x1 + (int16_t)w);
-  textAt(g, &FreeSansBold12pt7b, WHITE, numberX, 116, number);
-  g.drawCircle(cX - degreeGap / 2 - 1, 116 - 15, 2, WHITE);
-  g.drawCircle(cX - degreeGap / 2 - 1, 116 - 15, 3, WHITE);
-  textAt(g, &FreeSansBold12pt7b, WHITE, cX, 116, "C");
+  drawTemperature(g, RIGHT + 1 - temperatureWidth(g, d.tempC), 116, d.tempC, WHITE);
 
   textRight(g, &FreeSans9pt7b, GREY, RIGHT, 134, d.condition);
 }
 
-void drawWindCard(Adafruit_GFX &g, const FaceData &d) {
-  g.fillRoundRect(WIND_CARD_X, CARD_Y, WIND_CARD_W, CARD_H, 9, CARD_BLUE_FILL);
-  g.drawRoundRect(WIND_CARD_X, CARD_Y, WIND_CARD_W, CARD_H, 9, CARD_BLUE_EDGE);
-  g.drawFastVLine(WIND_DIVIDER_X, CARD_Y + 10, CARD_H - 20, CARD_BLUE_EDGE);
-
-  drawWindIcon(g, WIND_CARD_X + 8, CARD_Y + 12);
-
-  char speed[8];
-  if (d.weatherValid) {
-    snprintf(speed, sizeof(speed), "%d", d.windKmh);
-  } else {
-    strcpy(speed, "--");
-  }
-  int16_t end = textAt(g, &FreeSansBold12pt7b, WHITE, WIND_CARD_X + 44, CARD_Y + 32, speed);
-  if (end + 26 < WIND_DIVIDER_X) {
-    g.setFont(nullptr);
-    g.setTextSize(1);
-    g.setTextColor(GREY);
-    g.setCursor(end + 3, CARD_Y + 25);
-    g.print("km/h");
-  }
-  textAt(g, &FreeSans9pt7b, GREY, WIND_CARD_X + 8, CARD_Y + 62, "Wind speed");
-
-  const int16_t compassX = WIND_DIVIDER_X + (WIND_CARD_X + WIND_CARD_W - WIND_DIVIDER_X) / 2;
-  drawCompass(g, compassX, CARD_Y + 30, 17, d.weatherValid ? d.windDeg : -1);
-  const char *point = (d.weatherValid && d.windDeg >= 0) ? compassPoint(d.windDeg) : "--";
-  textCentre(g, &FreeSansBold9pt7b, WHITE, compassX, CARD_Y + 68, point);
+// Small text in the built-in 5x7 font; y is the top of the text.
+void smallText(Adafruit_GFX &g, uint16_t colour, int16_t x, int16_t y, const char *text) {
+  g.setFont(nullptr);
+  g.setTextSize(1);
+  g.setTextColor(colour);
+  g.setCursor(x, y);
+  g.print(text);
 }
 
-[[maybe_unused]] void drawComfortCard(Adafruit_GFX &g, const FaceData &d) {
-  // Green when pleasant, amber otherwise, neutral blue-grey with no data.
-  uint16_t fill = CARD_BLUE_FILL, edge = CARD_BLUE_EDGE, leaf = DIM, vein = BLACK;
-  if (d.weatherValid && d.comfortGood) {
-    fill = CARD_GREEN_FILL, edge = CARD_GREEN_EDGE, leaf = LEAF_GREEN, vein = LEAF_VEIN;
-  } else if (d.weatherValid) {
-    fill = CARD_AMBER_FILL, edge = CARD_AMBER_EDGE, leaf = LEAF_AMBER, vein = LEAF_AMBER_VEIN;
+void smallTextCentre(Adafruit_GFX &g, uint16_t colour, int16_t centre, int16_t y, const char *text) {
+  smallText(g, colour, centre - (int16_t)strlen(text) * 3, y, text);
+}
+
+// The big number on the left, with its unit after it if there's room.
+void cardValue(Adafruit_GFX &g, const char *value, const char *unit) {
+  int16_t end = textAt(g, &FreeSansBold12pt7b, WHITE, CARD_VALUE_X, CARD_VALUE_BASELINE, value);
+  if (unit && end + 3 + (int16_t)strlen(unit) * 6 < CARD_DIVIDER_X - 2) {
+    smallText(g, GREY, end + 3, CARD_VALUE_BASELINE - 7, unit);
   }
-  g.fillRoundRect(COMFORT_CARD_X, CARD_Y, COMFORT_CARD_W, CARD_H, 9, fill);
-  g.drawRoundRect(COMFORT_CARD_X, CARD_Y, COMFORT_CARD_W, CARD_H, 9, edge);
-  const int16_t centre = COMFORT_CARD_X + COMFORT_CARD_W / 2;
-  drawLeaf(g, centre, CARD_Y + 22, leaf, vein);
-  textCentre(g, &FreeSansBold9pt7b, WHITE, centre, CARD_Y + 56,
-             d.weatherValid ? d.comfort : "--");
-  textCentre(g, &FreeSans9pt7b, GREY, centre, CARD_Y + 73, "Climate");
+}
+
+void cardLabel(Adafruit_GFX &g, const char *label, uint16_t colour = GREY) {
+  textAt(g, &FreeSans9pt7b, colour, CARD_X + 8, CARD_LABEL_BASELINE, label);
+}
+
+void drawWindPage(Adafruit_GFX &g, const FaceData &d) {
+  drawWindIcon(g, CARD_X + 8, CARD_Y + 12);
+  char value[8] = "--";
+  if (d.weatherValid) snprintf(value, sizeof(value), "%d", d.windKmh);
+  cardValue(g, value, "km/h");
+  cardLabel(g, "Wind speed");
+
+  drawCompass(g, CARD_DIAL_X, CARD_Y + 30, 17, d.weatherValid ? d.windDeg : -1);
+  const char *point = (d.weatherValid && d.windDeg >= 0) ? compassPoint(d.windDeg) : "--";
+  textCentre(g, &FreeSansBold9pt7b, WHITE, CARD_DIAL_X, CARD_Y + 68, point);
+}
+
+void drawPressurePage(Adafruit_GFX &g, const FaceData &d) {
+  drawGaugeIcon(g, CARD_X + 8, CARD_Y + 12);
+  char value[8] = "--";
+  if (d.weatherValid) snprintf(value, sizeof(value), "%d", d.pressureHpa);
+  cardValue(g, value, "hPa");
+  int16_t end = textAt(g, &FreeSans9pt7b, GREY, CARD_X + 8, CARD_LABEL_BASELINE, "Pressure");
+  if (d.weatherValid && d.pressureHpa >= 1000) {  // unit didn't fit after 4 digits
+    smallText(g, DIM, end + 4, CARD_LABEL_BASELINE - 7, "hPa");
+  }
+
+  // Half-circle dial from 980 hPa (left) to 1040 hPa (right).
+  const int16_t cx = CARD_DIAL_X, cy = CARD_Y + 38, r = 15;
+  g.drawCircleHelper(cx, cy, r, 0x1 | 0x2, DIM);
+  for (int i = 0; i <= 4; i++) {
+    float a = (float)M_PI * (1.0f - i / 4.0f);  // left to right over the top
+    g.drawLine(cx + cosf(a) * (r - 3), cy - sinf(a) * (r - 3), cx + cosf(a) * r,
+               cy - sinf(a) * r, GREY);
+  }
+  if (!d.weatherValid) return;
+  float t = (d.pressureHpa - 980) / 60.0f;
+  t = t < 0 ? 0 : (t > 1 ? 1 : t);
+  float a = (float)M_PI * (1.0f - t);
+  thickLine(g, cx, cy, cx + cosf(a) * (r - 4), cy - sinf(a) * (r - 4), WHITE);
+  g.fillCircle(cx, cy, 2, WHITE);
+  const char *level = d.pressureHpa < 1006 ? "LOW" : d.pressureHpa > 1020 ? "HIGH" : "NORMAL";
+  smallTextCentre(g, WHITE, cx, CARD_Y + 48, level);
+}
+
+void drawUvPage(Adafruit_GFX &g, const FaceData &d) {
+  drawSun(g, CARD_X + 22, CARD_Y + 22, 5);
+  int band = 0;
+  char value[8] = "--";
+  if (d.weatherValid) {
+    int uv = lroundf(d.uvIndex);
+    snprintf(value, sizeof(value), "%d", uv);
+    band = uv <= 2 ? 0 : uv <= 5 ? 1 : uv <= 7 ? 2 : uv <= 10 ? 3 : 4;
+  }
+  cardValue(g, value, "UV");
+  if (d.weatherValid) {
+    cardLabel(g, UV_LEVELS[band], UV_COLOURS[band]);
+  } else {
+    cardLabel(g, "UV index");
+  }
+
+  // Five-band colour scale, low at the bottom, with a marker on the current band.
+  const int16_t barX = CARD_DIAL_X - 2, barTop = CARD_Y + 11, segment = 10;
+  for (int i = 0; i < 5; i++) {
+    int16_t y = barTop + (4 - i) * segment;
+    g.fillRect(barX, y, 10, segment - 2, UV_COLOURS[i]);
+  }
+  if (d.weatherValid) {
+    int16_t y = barTop + (4 - band) * segment + (segment - 2) / 2;
+    g.fillTriangle(barX - 8, y - 4, barX - 8, y + 4, barX - 2, y, WHITE);
+  }
+}
+
+void drawFeelsLikePage(Adafruit_GFX &g, const FaceData &d) {
+  drawThermometer(g, CARD_X + 14, CARD_Y + 8);
+  if (d.weatherValid) {
+    drawTemperature(g, CARD_VALUE_X, CARD_VALUE_BASELINE, d.feelsLikeC, WHITE);
+  } else {
+    cardValue(g, "--", nullptr);
+  }
+  cardLabel(g, "Feels like");
+
+  // How it compares with the actual temperature.
+  if (!d.weatherValid) return;
+  const int16_t cx = CARD_DIAL_X, cy = CARD_Y + 20;
+  int diff = d.feelsLikeC - d.tempC;
+  char text[8];
+  if (diff == 0) {
+    g.fillRect(cx - 7, cy - 4, 14, 3, GREY);
+    g.fillRect(cx - 7, cy + 2, 14, 3, GREY);
+    smallTextCentre(g, GREY, cx, CARD_Y + 38, "same");
+  } else {
+    uint16_t colour = diff > 0 ? WARM_ORANGE : COOL_BLUE;
+    if (diff > 0) {
+      g.fillTriangle(cx, cy - 8, cx - 8, cy + 4, cx + 8, cy + 4, colour);
+    } else {
+      g.fillTriangle(cx, cy + 6, cx - 8, cy - 6, cx + 8, cy - 6, colour);
+    }
+    snprintf(text, sizeof(text), "%+d", diff);
+    int16_t x1;
+    uint16_t w;
+    measure(g, &FreeSansBold9pt7b, text, x1, w);
+    int16_t x = cx - (x1 + (int16_t)w + 6) / 2;
+    int16_t end = textAt(g, &FreeSansBold9pt7b, colour, x, CARD_Y + 44, text);
+    g.drawCircle(end + 3, CARD_Y + 34, 2, colour);
+    smallTextCentre(g, GREY, cx, CARD_Y + 52, diff > 0 ? "warmer" : "cooler");
+  }
+}
+
+void drawCard(Adafruit_GFX &g, const FaceData &d) {
+  g.fillRoundRect(CARD_X, CARD_Y, CARD_W, CARD_H, 9, CARD_FILL);
+  g.drawRoundRect(CARD_X, CARD_Y, CARD_W, CARD_H, 9, CARD_EDGE);
+  g.drawFastVLine(CARD_DIVIDER_X, CARD_Y + 10, CARD_H - 20, CARD_EDGE);
+
+  switch (d.cardPage) {
+    case CARD_PRESSURE: drawPressurePage(g, d); break;
+    case CARD_UV: drawUvPage(g, d); break;
+    case CARD_FEELS_LIKE: drawFeelsLikePage(g, d); break;
+    default: drawWindPage(g, d); break;
+  }
+
+  // Page dots, centred under the left part of the card.
+  const int16_t spacing = 9;
+  const int16_t first = (CARD_X + CARD_DIVIDER_X) / 2 - spacing * (CARD_PAGE_COUNT - 1) / 2;
+  for (int i = 0; i < CARD_PAGE_COUNT; i++) {
+    bool active = i == d.cardPage;
+    g.fillCircle(first + i * spacing, CARD_DOTS_Y, 2, active ? ACCENT_BLUE : DIM);
+  }
 }
 
 }  // namespace
@@ -406,29 +521,12 @@ void drawFace(Adafruit_GFX &gfx, const FaceData &d) {
   drawFaceTime(gfx, d);
   drawLocation(gfx, d);
   drawWeather(gfx, d);
-  drawWindCard(gfx, d);
-  // Comfort card removed at Neehal's request; its space (x 156-236, y 150-230)
-  // is free for the next element. drawComfortCard() is kept for reference.
+  drawCard(gfx, d);
 }
 
-void describeComfort(int tempC, int humidity, char *label, size_t labelSize, bool &good) {
-  const char *text;
-  good = false;
-  if (humidity >= 80 && tempC >= 20) {
-    text = "Humid";
-  } else if (tempC < 10) {
-    text = "Cold";
-  } else if (tempC < 16) {
-    text = "Cool";
-  } else if (tempC <= 26) {
-    text = "Pleasant";
-    good = true;
-  } else if (tempC <= 32) {
-    text = "Warm";
-  } else {
-    text = "Hot";
-  }
-  snprintf(label, labelSize, "%s", text);
+void drawFaceCard(Adafruit_GFX &gfx, const FaceData &d) {
+  gfx.setTextWrap(false);
+  drawCard(gfx, d);
 }
 
 const char *compassPoint(int degrees) {

@@ -16,6 +16,11 @@
 //         Removed PlatformIO-over-WiFi uploads and sdpro.local (mDNS) to keep
 //         the firmware under 500KB; updates go through the /update page.
 //
+// v0.6.0: the bottom card rotates every 5 seconds between wind, pressure,
+//         UV index and feels-like temperature. Weather now comes from
+//         Open-Meteo (free for non-commercial use, no API key; data licensed
+//         CC BY 4.0), since OpenWeatherMap's free feed has no UV index.
+//
 // Size rule: an update is written beside the running firmware, so each
 // version must stay under ~500KB (about half the 1MB firmware area). The
 // build checks this (check_size.py).
@@ -51,12 +56,6 @@
 #define FW_VERSION "dev"
 #endif
 
-// Your own OpenWeatherMap key goes in secrets.h. Without it the clock still
-// runs; the weather area just says so.
-#ifndef OWM_API_KEY
-#define OWM_API_KEY ""
-#endif
-
 // ---------------------------------------------------------------------------
 // Clock face settings: change these to personalise the clock
 // ---------------------------------------------------------------------------
@@ -65,8 +64,13 @@ static const char *FACE_GREETING = "Hello";
 static const char *FACE_NAME = "Neehal";
 static const char *FACE_CITY = "Sydney";
 
-// City for the weather, as "City,CountryCode" (OpenWeatherMap search format).
-static const char *WEATHER_QUERY = "Sydney,AU";
+// Where the weather is for (decimal degrees). Sydney CBD; find others at
+// https://www.latlong.net
+static const char *WEATHER_LATITUDE = "-33.8688";
+static const char *WEATHER_LONGITUDE = "151.2093";
+
+// How long each page of the bottom card stays up.
+static const uint32_t CARD_PAGE_MS = 5000;
 
 // Sydney time, switching to daylight saving on the first Sunday of October
 // and back on the first Sunday of April.
@@ -170,6 +174,8 @@ FaceData face;
 bool faceNeedsRedraw = true;
 int lastMinuteShown = -1;
 int lastDayShown = -1;
+int localDay = -1;            // day of the year in Sydney time, for spotting midnight
+uint32_t lastCardChange = 0;
 
 uint32_t nextWeatherAt = 0;
 String weatherStatus = "Not fetched yet";
@@ -400,6 +406,7 @@ void updateFaceTime() {
                                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
   face.hour24 = t.tm_hour;
   face.minute = t.tm_min;
+  localDay = t.tm_year * 400 + t.tm_yday;
   snprintf(face.dayName, sizeof(face.dayName), "%s", DAYS[t.tm_wday]);
   snprintf(face.date, sizeof(face.date), "%d %s %d", t.tm_mday, MONTHS[t.tm_mon],
            t.tm_year + 1900);
@@ -409,59 +416,69 @@ void updateFaceTime() {
 // Weather
 // ---------------------------------------------------------------------------
 
-// Turns an OpenWeatherMap condition code into an icon and a short label.
-// Codes: https://openweathermap.org/weather-conditions
-void describeWeather(int id, const char *mainText, bool night) {
-  const char *label = mainText;
+// Turns a WMO weather code (as used by Open-Meteo) into an icon and label.
+// Codes: https://open-meteo.com/en/docs (section "WMO Weather interpretation codes")
+void describeWeather(int code, bool day) {
+  const char *label = "Cloudy";
   WeatherIcon icon = ICON_CLOUD;
-  if (id >= 200 && id < 300) {
-    label = "Storm", icon = ICON_STORM;
-  } else if (id >= 300 && id < 400) {
-    label = "Drizzle", icon = ICON_RAIN;
-  } else if (id >= 500 && id < 600) {
-    label = id >= 502 && id <= 504 ? "Heavy rain" : "Rain", icon = ICON_RAIN;
-  } else if (id >= 600 && id < 700) {
-    label = "Snow", icon = ICON_SNOW;
-  } else if (id >= 700 && id < 800) {
-    icon = ICON_MIST;  // Mist, Fog, Haze, Smoke... keep OpenWeatherMap's word
-  } else if (id == 800) {
-    label = night ? "Clear" : "Sunny", icon = night ? ICON_MOON : ICON_SUN;
-  } else if (id == 801 || id == 802) {
-    label = "Partly cloudy", icon = night ? ICON_PARTLY_NIGHT : ICON_PARTLY_DAY;
-  } else if (id > 802) {
-    label = "Cloudy", icon = ICON_CLOUD;
+  switch (code) {
+    case 0:
+      label = day ? "Sunny" : "Clear", icon = day ? ICON_SUN : ICON_MOON;
+      break;
+    case 1:
+      label = day ? "Mostly sunny" : "Mostly clear", icon = day ? ICON_PARTLY_DAY : ICON_PARTLY_NIGHT;
+      break;
+    case 2:
+      label = "Partly cloudy", icon = day ? ICON_PARTLY_DAY : ICON_PARTLY_NIGHT;
+      break;
+    case 3:
+      label = "Cloudy", icon = ICON_CLOUD;
+      break;
+    case 45: case 48:
+      label = "Fog", icon = ICON_MIST;
+      break;
+    case 51: case 53: case 55: case 56: case 57:
+      label = "Drizzle", icon = ICON_RAIN;
+      break;
+    case 61: case 63: case 66: case 80: case 81:
+      label = code >= 80 ? "Showers" : "Rain", icon = ICON_RAIN;
+      break;
+    case 65: case 67: case 82:
+      label = "Heavy rain", icon = ICON_RAIN;
+      break;
+    case 71: case 73: case 75: case 77: case 85: case 86:
+      label = "Snow", icon = ICON_SNOW;
+      break;
+    case 95: case 96: case 99:
+      label = "Storm", icon = ICON_STORM;
+      break;
   }
   snprintf(face.condition, sizeof(face.condition), "%s", label);
   face.icon = icon;
 }
 
-// Downloads current weather. Returns true if the face needs redrawing.
+// Downloads current weather from Open-Meteo. Returns true if the face
+// needs redrawing. Free, non-commercial use: under 10,000 calls a day;
+// this makes 144 (one every 10 minutes).
 bool fetchWeather() {
-  if (strlen(OWM_API_KEY) == 0) {
-    face.weatherValid = false;
-    face.weatherMessage = "needs key";
-    weatherStatus = "No OWM_API_KEY in secrets.h";
-    nextWeatherAt = millis() + WEATHER_REFRESH_MS;
-    return true;
-  }
   if (WiFi.status() != WL_CONNECTED) {
     weatherStatus = "Waiting for WiFi";
     nextWeatherAt = millis() + WEATHER_RETRY_MS;
     return false;
   }
 
-  String query = WEATHER_QUERY;
-  query.replace(" ", "%20");
-  String url = String("https://api.openweathermap.org/data/2.5/weather?units=metric&q=") +
-               query + "&appid=" + OWM_API_KEY;
+  String url = String("https://api.open-meteo.com/v1/forecast?latitude=") + WEATHER_LATITUDE +
+               "&longitude=" + WEATHER_LONGITUDE +
+               "&current=temperature_2m,apparent_temperature,is_day,weather_code,"
+               "pressure_msl,wind_speed_10m,wind_direction_10m,uv_index"
+               "&wind_speed_unit=kmh&timezone=auto";
 
-  // HTTPS keeps the API key from being read off the network. setInsecure()
-  // skips certificate checks (the clock has no certificate store); fine for
-  // weather data, but it means the connection isn't protected from a
-  // deliberate impersonator.
+  // setInsecure() skips certificate checks (the clock has no certificate
+  // store). Nothing secret is sent, so this only matters if someone
+  // deliberately fakes the weather.
   BearSSL::WiFiClientSecure client;
   client.setInsecure();
-  if (client.probeMaxFragmentLength("api.openweathermap.org", 443, 1024)) {
+  if (client.probeMaxFragmentLength("api.open-meteo.com", 443, 1024)) {
     client.setBufferSizes(1024, 1024);  // saves ~15KB of RAM if the server allows it
   }
 
@@ -476,48 +493,42 @@ bool fetchWeather() {
     if (code == 200) {
       // Only keep the fields we use, so the response fits in little memory.
       JsonDocument filter;
-      filter["main"]["temp"] = true;
-      filter["main"]["humidity"] = true;
-      filter["weather"][0]["id"] = true;
-      filter["weather"][0]["main"] = true;
-      filter["wind"]["speed"] = true;
-      filter["wind"]["deg"] = true;
-      filter["sys"]["sunrise"] = true;
-      filter["sys"]["sunset"] = true;
-      filter["dt"] = true;
+      JsonObject want = filter["current"].to<JsonObject>();
+      for (const char *key : {"temperature_2m", "apparent_temperature", "is_day", "weather_code",
+                              "pressure_msl", "wind_speed_10m", "wind_direction_10m", "uv_index"}) {
+        want[key] = true;
+      }
 
       JsonDocument doc;
       DeserializationError err =
           deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+      JsonObject now = doc["current"];
       if (err) {
         weatherStatus = String("Could not read response: ") + err.c_str();
+      } else if (now.isNull()) {
+        weatherStatus = "Response had no current weather";
       } else {
-        float temp = doc["main"]["temp"] | 0.0f;
-        int humidity = doc["main"]["humidity"] | 0;
-        long dt = doc["dt"] | 0L;
-        long sunrise = doc["sys"]["sunrise"] | 0L;
-        long sunset = doc["sys"]["sunset"] | 0L;
-        bool night = sunrise && sunset && (dt < sunrise || dt > sunset);
-
-        face.tempC = lroundf(temp);
-        describeWeather(doc["weather"][0]["id"] | 800, doc["weather"][0]["main"] | "", night);
-        face.windKmh = lroundf((doc["wind"]["speed"] | 0.0f) * 3.6f);
-        face.windDeg = doc["wind"]["deg"] | -1;
-        bool good;
-        describeComfort(face.tempC, humidity, face.comfort, sizeof(face.comfort), good);
-        face.comfortGood = good;
+        face.tempC = lroundf(now["temperature_2m"] | 0.0f);
+        face.feelsLikeC = lroundf(now["apparent_temperature"] | 0.0f);
+        describeWeather(now["weather_code"] | 3, (now["is_day"] | 1) == 1);
+        face.pressureHpa = lroundf(now["pressure_msl"] | 0.0f);
+        face.windKmh = lroundf(now["wind_speed_10m"] | 0.0f);
+        face.windDeg = now["wind_direction_10m"] | -1;
+        face.uvIndex = now["uv_index"] | 0.0f;
         face.weatherValid = true;
         changed = true;
 
         char when[6] = "--:--";
         if (face.timeValid) snprintf(when, sizeof(when), "%02d:%02d", face.hour24, face.minute);
-        weatherStatus = String("OK at ") + when + ": " + face.tempC + " C, " + face.condition +
-                        ", humidity " + humidity + "%, wind " + face.windKmh + " km/h";
+        weatherStatus = String("OK at ") + when + ": " + face.tempC + " C (feels " +
+                        face.feelsLikeC + "), " + face.condition + ", wind " + face.windKmh +
+                        " km/h " + (face.windDeg >= 0 ? compassPoint(face.windDeg) : "") + ", " +
+                        face.pressureHpa + " hPa, UV " + String(face.uvIndex, 1);
       }
-    } else if (code == 401) {
-      weatherStatus = "Key rejected (401). New keys can take up to 2 hours to activate.";
-    } else if (code == 404) {
-      weatherStatus = "City not found (404). Check WEATHER_QUERY.";
+    } else if (code == 400) {
+      weatherStatus = "Request rejected (400). Check WEATHER_LATITUDE / WEATHER_LONGITUDE.";
+    } else if (code == 429) {
+      weatherStatus = "Too many requests (429). Will retry.";
     } else {
       weatherStatus = String("Request failed: ") + code + " " + HTTPClient::errorToString(code);
     }
@@ -556,16 +567,20 @@ void updateFace() {
 
   updateFaceTime();
   int minute = face.timeValid ? face.hour24 * 60 + face.minute : -2;
-  int day = face.timeValid ? (int)(time(nullptr) / 86400) : -2;
-  if (day != lastDayShown) faceNeedsRedraw = true;  // new date (or time just synced)
+  int day = face.timeValid ? localDay : -2;
+  if (day != lastDayShown) faceNeedsRedraw = true;  // midnight (or time just synced)
 
   if (faceNeedsRedraw) {
     drawFace(*tft, face);
     faceNeedsRedraw = false;
-  } else if (minute != lastMinuteShown) {
-    drawFaceTime(*tft, face);
+    lastCardChange = millis();
   } else {
-    return;
+    if (minute != lastMinuteShown) drawFaceTime(*tft, face);
+    if (millis() - lastCardChange >= CARD_PAGE_MS) {
+      face.cardPage = (CardPage)((face.cardPage + 1) % CARD_PAGE_COUNT);
+      drawFaceCard(*tft, face);
+      lastCardChange = millis();
+    }
   }
   lastMinuteShown = minute;
   lastDayShown = day;
@@ -652,7 +667,9 @@ void handleRoot() {
                                       (face.minute < 10 ? "0" : "") + face.minute
                                 : String("not synced yet")) +
           "</td></tr>";
-  html += "<tr><td>Weather</td><td>" + weatherStatus + "</td></tr>";
+  html += "<tr><td>Weather</td><td>" + weatherStatus +
+          "<br><small>Weather data by <a href='https://open-meteo.com/'>Open-Meteo.com</a> "
+          "(CC BY 4.0)</small></td></tr>";
   html += "<tr><td>Screen</td><td>" +
           String(screen == SCREEN_FACE ? "Clock face" : screen == SCREEN_TEST ? "Test screen" : "Pin scan") +
           "</td></tr></table>"

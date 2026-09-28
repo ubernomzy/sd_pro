@@ -13,7 +13,7 @@ Progress so far:
 - v0.2.0 scanned 72 DC/reset/SPI-mode combinations: display stayed blank
 - Disassembling the seller's firmware showed the display setup code
   (at `0x4021a24b`) drives chip-select on GPIO15, which we never drove,
-  and contains the ST7789 startup table (at file offset `0x6a30b`)
+  and contains the ST7789 startup table (at file offset `0x6a308`)
 - v0.3.0 used those exact pins: still blank
 - The pin order in the seller's code matches the Adafruit display library,
   so the seller uses the same library; the difference is their startup

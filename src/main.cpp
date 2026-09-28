@@ -10,6 +10,7 @@
 //         SPI_MODE3 is 0x11, so passing the number 3 actually gave mode 1.
 //         The scan then worked on every SPI mode 3 step and no mode 0 step.
 // v0.4.1: SPI mode 3 is now the default, so the screen works out of the box.
+// v0.4.2: rotation 2 is the default: the panel is mounted upside down.
 //
 // Pins from the seller's firmware (display setup code at 0x4021a24b):
 //   CS = GPIO15, DC = GPIO0, RST = GPIO2, backlight = GPIO5 (on when LOW)
@@ -65,7 +66,8 @@ struct DisplayConfig {
 // "SDP3" v0.4) so older saved settings are ignored instead of misread.
 static const uint32_t CONFIG_MAGIC = 0x53445033;
 // Confirmed on the clock (v0.4.0 scan, steps 2/3/6/7): only SPI mode 3 works.
-static const DisplayConfig DEFAULT_CONFIG = {CONFIG_MAGIC, 0, 2, 15, 5, 1, 3, 0, 1};
+// The panel is mounted upside down, so rotation 2 (180 degrees) is upright.
+static const DisplayConfig DEFAULT_CONFIG = {CONFIG_MAGIC, 0, 2, 15, 5, 1, 3, 2, 1};
 
 // The seller's ST7789 startup sequence, copied byte for byte from their
 // firmware (file offset 0x6a308 in both v1.0.4 and v1.0.6). Format is the

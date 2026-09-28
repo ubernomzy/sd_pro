@@ -4,7 +4,7 @@ Custom firmware for the SD Pro WiFi weather clock (ESP8266, 4MB flash,
 1.54" 240x240 ST7789 LCD). Forked from JUZIPi-tech/SD_PRO, which only
 publishes compiled firmware. The seller's files are kept in `original/`.
 
-## Current version: 0.4.1 (display working)
+## Current version: 0.4.2 (display working, upright)
 
 Progress so far:
 
@@ -24,6 +24,8 @@ Progress so far:
   no mode 0 step; chip-select and reset made no difference. SPI mode 3 was
   the real requirement, hidden by the mode bug since v0.1.0
 - v0.4.1 makes SPI mode 3 the default
+- The image was upside down: the panel is mounted rotated 180 degrees.
+  v0.4.2 makes rotation 2 the default
 
 ## Features
 
@@ -48,6 +50,7 @@ Display pins, from the seller's firmware:
 | Reset     | 2    | Seller code: pulses GPIO2 HIGH-LOW-HIGH    |
 | Backlight | 5    | Confirmed on the clock (on when LOW)       |
 | SPI mode  | 3    | Confirmed on the clock (mode 0 stays blank)|
+| Rotation  | 2    | Panel is mounted upside down               |
 
 Display chip: ST7789, 240x240. The seller's startup table (file offset
 `0x6a308`, identical in v1.0.4 and v1.0.6) is copied into `SELLER_INIT`

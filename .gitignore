@@ -9,3 +9,7 @@ include/secrets.h
 __pycache__/
 *.pyc
 .DS_Store
+
+# Renamed copies of firmware.bin for the seller's upload page
+# (it only accepts files whose name starts with "SDP")
+/SDP*.bin

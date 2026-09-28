@@ -266,11 +266,11 @@ void drawWeatherIcon(Adafruit_GFX &g, WeatherIcon icon, int16_t cx, int16_t cy, 
   }
 }
 
-// Map pin, 12 x 18, top-left at (x, y).
+// Map pin, 10 x 15, top-left at (x, y).
 void drawPin(Adafruit_GFX &g, int16_t x, int16_t y) {
-  g.fillCircle(x + 6, y + 6, 6, ACCENT_BLUE);
-  g.fillTriangle(x + 1, y + 9, x + 11, y + 9, x + 6, y + 18, ACCENT_BLUE);
-  g.fillCircle(x + 6, y + 6, 2, BLACK);
+  g.fillCircle(x + 5, y + 5, 5, ACCENT_BLUE);
+  g.fillTriangle(x + 1, y + 8, x + 9, y + 8, x + 5, y + 15, ACCENT_BLUE);
+  g.fillCircle(x + 5, y + 5, 2, BLACK);
 }
 
 // Three wind streaks with curled ends, about 30 x 22, top-left at (x, y).
@@ -335,8 +335,8 @@ void drawCompass(Adafruit_GFX &g, int16_t cx, int16_t cy, int16_t r, int degrees
 // ---------------------------------------------------------------------------
 
 void drawHeader(Adafruit_GFX &g, const FaceData &d) {
-  drawPin(g, LEFT, 7);
-  textAt(g, &FreeSansBold12pt7b, WHITE, LEFT + 19, 24, d.city);
+  drawPin(g, LEFT, 10);
+  textAt(g, &FreeSansBold9pt7b, WHITE, LEFT + 15, 24, d.city);
   if (d.timeValid) {
     textRight(g, &FreeSansBold12pt7b, WHITE, RIGHT, 24, d.dayName);
     textRight(g, &FreeSans12pt7b, WHITE, RIGHT, 48, d.date);

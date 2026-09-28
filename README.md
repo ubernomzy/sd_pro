@@ -4,7 +4,7 @@ Custom firmware for the SD Pro WiFi weather clock (ESP8266, 4MB flash,
 1.54" 240x240 ST7789 LCD). Forked from JUZIPi-tech/SD_PRO, which only
 publishes compiled firmware. The seller's files are kept in `original/`.
 
-## Current version: 0.10.0 (weather condition card)
+## Current version: 0.10.1 (smaller city)
 
 Progress so far:
 
@@ -64,6 +64,8 @@ Progress so far:
   giving room below the date. The card now starts just under the time
   (162 x 122): page name and icon on top, a big value and a dial below.
   UV is no longer fetched
+- v0.10.1: the city name is smaller (bold 9pt instead of 12pt), with a
+  smaller pin, so it doesn't crowd the date
 
 ## Personalise it
 

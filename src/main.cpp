@@ -34,6 +34,7 @@
 // v0.10.0: the UV page is replaced by a weather condition page, so the
 //          condition leaves the top-right; smaller weather icon; the card
 //          grows up to just below the time.
+// v0.10.1: smaller city name and pin, so they don't crowd the date.
 //
 // Size rule: an update is written beside the running firmware, so each
 // version must stay under ~500KB (about half the 1MB firmware area). The

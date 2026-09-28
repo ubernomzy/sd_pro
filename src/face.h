@@ -69,5 +69,38 @@ void drawFaceTime(Adafruit_GFX &gfx, const FaceData &d);
 // Redraws only the bottom card, for switching pages.
 void drawFaceCard(Adafruit_GFX &gfx, const FaceData &d);
 
+// ----- Spaceman animation (the seller's /0.gif), right of the bottom card -----
+
+constexpr int16_t SPACEMAN_X = 156;  // centred in the gap right of the card
+constexpr int16_t SPACEMAN_Y = 150;  // level with the card
+
+uint8_t spacemanFrameCount();
+uint16_t spacemanFrameMs();          // how long each frame shows, from the GIF
+int16_t spacemanSize();              // width = height (80)
+
+// Unpacks one frame of the animation a row at a time.
+class SpacemanFrame {
+ public:
+  explicit SpacemanFrame(uint8_t frame);
+  void nextRow(uint16_t *pixels);    // fills spacemanSize() colours
+
+ private:
+  uint32_t pos_;       // next byte of the packed data
+  uint16_t colour_;    // colour of the current run
+  uint8_t left_ = 0;   // pixels left in the current run
+};
+
+// Draws one frame. A template so the display's own fast drawRGBBitmap is
+// used (the generic one sends pixels one at a time).
+template <class Gfx>
+void drawSpaceman(Gfx &gfx, uint8_t frame) {
+  uint16_t row[80];
+  SpacemanFrame f(frame);
+  for (int16_t y = 0; y < spacemanSize(); y++) {
+    f.nextRow(row);
+    gfx.drawRGBBitmap(SPACEMAN_X, SPACEMAN_Y + y, row, spacemanSize(), 1);
+  }
+}
+
 // 8-point compass name ("N", "NE", ...) for a wind direction in degrees.
 const char *compassPoint(int degrees);

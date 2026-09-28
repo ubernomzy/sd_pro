@@ -4,7 +4,7 @@ Custom firmware for the SD Pro WiFi weather clock (ESP8266, 4MB flash,
 1.54" 240x240 ST7789 LCD). Forked from JUZIPi-tech/SD_PRO, which only
 publishes compiled firmware. The seller's files are kept in `original/`.
 
-## Current version: 0.7.0 (file browser)
+## Current version: 0.8.0 (spaceman)
 
 Progress so far:
 
@@ -45,6 +45,12 @@ Progress so far:
   job is done) and weather uses plain HTTP instead of HTTPS (public data;
   the HTTPS code never checked certificates and cost 82KB). Firmware is
   now about 431KB
+- v0.8.0: the seller's spaceman animation (`/0.gif` on the clock, saved
+  as `assets/spaceman.gif`) plays in the gap right of the bottom card,
+  at the GIF's own speed (20 frames, 20ms each). `tools/make_spaceman.py`
+  converts it on the PC into 16 greys, run-length packed
+  (`src/spaceman_data.h`, 26KB), so the clock needs no GIF decoder and
+  almost no memory. Firmware is about 458KB
 
 ## Personalise it
 
@@ -62,10 +68,14 @@ static const char *TIMEZONE = "AEST-10AEDT,M10.1.0,M4.1.0/3";
 
 The layout itself is in `src/face.cpp` (positions, colours, fonts, icons).
 
+To swap the animation: replace `assets/spaceman.gif` with another GIF of
+at most 80x80 pixels (square), run `python3 tools/make_spaceman.py`, and
+rebuild. Colour is dropped (16 greys), and keep an eye on the size check.
+
 ## Features
 
-- Clock face: name, date, time, weather, and a card rotating between wind,
-  pressure, UV index and feels-like temperature
+- Clock face: name, date, time, weather, a card rotating between wind,
+  pressure, UV index and feels-like temperature, and the animated spaceman
 - Joins your 2.4GHz home WiFi. If it can't within 20 seconds, it opens a
   recovery hotspot `SDPro-Recovery` at http://192.168.4.1
 - Password-protected firmware update page at `/update` (user `admin`)
@@ -104,7 +114,7 @@ in `src/main.cpp`; the status page can switch back to the generic table.
    `secrets.h` is in `.gitignore` and must never be committed. (Weather
    needs no key.)
 2. Build: `pio run -e sdpro`
-3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 431KB).
+3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 458KB).
    The build fails on purpose if it goes over 500KB (`check_size.py`).
 
 ## Flash

@@ -13,6 +13,7 @@
 //   [      o o o o            ]          <- page dots
 
 #include "face.h"
+#include "spaceman_data.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -533,4 +534,30 @@ const char *compassPoint(int degrees) {
   static const char *POINTS[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
   int index = ((degrees % 360 + 360) % 360 + 22) / 45;
   return POINTS[index % 8];
+}
+
+// ----- Spaceman -----
+
+static_assert(SPACEMAN_W == SPACEMAN_H && SPACEMAN_W <= 80, "drawSpaceman's row buffer is 80 pixels");
+
+uint8_t spacemanFrameCount() { return SPACEMAN_FRAMES; }
+uint16_t spacemanFrameMs() { return SPACEMAN_FRAME_MS; }
+int16_t spacemanSize() { return SPACEMAN_W; }
+
+SpacemanFrame::SpacemanFrame(uint8_t frame)
+    : pos_(pgm_read_word(&SPACEMAN_OFFSETS[frame % SPACEMAN_FRAMES])), colour_(0) {}
+
+// Each packed byte is (shade << 4) | (run length - 1): 16 greys, runs of
+// 1-16 pixels. Runs carry on from one row to the next.
+void SpacemanFrame::nextRow(uint16_t *pixels) {
+  for (int16_t x = 0; x < SPACEMAN_W; x++) {
+    if (left_ == 0) {
+      uint8_t b = pgm_read_byte(&SPACEMAN_RLE[pos_++]);
+      uint8_t v = (b >> 4) * 17;  // shade 0-15 -> 0-255
+      colour_ = rgb(v, v, v);
+      left_ = (b & 0x0F) + 1;
+    }
+    pixels[x] = colour_;
+    left_--;
+  }
 }

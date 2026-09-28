@@ -25,6 +25,9 @@
 //         display pins are confirmed. Weather is fetched over plain HTTP
 //         (public data, and the HTTPS code was 82KB), making room for the
 //         file system and, later, the spaceman animation.
+// v0.8.0: the seller's spaceman animation (their /0.gif) plays right of the
+//         bottom card. Converted on the PC by tools/make_spaceman.py into
+//         spaceman_data.h (26KB), so the clock needs no GIF decoder.
 //
 // Size rule: an update is written beside the running firmware, so each
 // version must stay under ~500KB (about half the 1MB firmware area). The
@@ -181,6 +184,8 @@ int lastMinuteShown = -1;
 int lastDayShown = -1;
 int localDay = -1;            // day of the year in Sydney time, for spotting midnight
 uint32_t lastCardChange = 0;
+uint8_t spacemanFrame = 0;
+uint32_t lastSpacemanFrame = 0;
 
 bool fsMounted = false;
 
@@ -505,6 +510,7 @@ void updateFace() {
 
   if (faceNeedsRedraw) {
     drawFace(*tft, face);
+    drawSpaceman(*tft, spacemanFrame);
     faceNeedsRedraw = false;
     lastCardChange = millis();
   } else {
@@ -514,6 +520,13 @@ void updateFace() {
       drawFaceCard(*tft, face);
       lastCardChange = millis();
     }
+  }
+  // Spaceman: next frame when it's due. Each frame takes a few ms to send;
+  // if the clock was busy (e.g. fetching weather) it just carries on.
+  if (millis() - lastSpacemanFrame >= spacemanFrameMs()) {
+    lastSpacemanFrame = millis();
+    spacemanFrame = (spacemanFrame + 1) % spacemanFrameCount();
+    drawSpaceman(*tft, spacemanFrame);
   }
   lastMinuteShown = minute;
   lastDayShown = day;

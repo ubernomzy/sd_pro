@@ -1,17 +1,15 @@
-// SD Pro clock - first test firmware (v0.1.0)
+// SD Pro clock - custom firmware
 //
-// Goal of this version: prove we can run our own code on the clock
-// without ever losing the ability to update it.
+// v0.1.0: WiFi, password-protected update page, status page, test screen.
+// v0.2.0: adds a display pin scan. The scan cycles through every sensible
+//         combination of DC pin, reset pin and SPI mode, drawing a large
+//         step number on the screen for each. When a number appears on the
+//         clock, that step's pins are the right ones.
 //
-//   1. Join home WiFi (or open a recovery hotspot if that fails)
-//   2. Keep a password-protected update page running at /update
-//   3. Show a status page with editable display pin settings
-//   4. Try to draw "Hello" on the 240x240 ST7789 screen
-//
-// If the screen stays blank, the pin guesses are wrong. Change them on
-// the status page and the clock reboots with the new pins - no rebuild.
+// Confirmed on the real clock so far: backlight = GPIO5, on when LOW.
 
 #include <Arduino.h>
+#include <new>
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPUpdateServer.h>
@@ -65,6 +63,76 @@ Adafruit_ST7789 *tft = nullptr;
 bool apMode = false;
 
 // ---------------------------------------------------------------------------
+// Pin scan
+// ---------------------------------------------------------------------------
+
+// Candidate pins. GPIO5 is the confirmed backlight; GPIO13/14 are the SPI
+// bus; GPIO6-11 belong to the flash chip and are never touched.
+// GPIO16 goes last: on some boards it is wired to the chip's reset.
+static const int8_t DC_CANDIDATES[] = {0, 2, 4, 12, 15, 16};
+static const int8_t RST_CANDIDATES[] = {-1, 2, 0, 4, 12, 15, 16};
+static const uint8_t MODE_CANDIDATES[] = {3, 0};
+
+// Pins held LOW during each step, in case one is the display's chip-select.
+// GPIO12 is left alone because SPI.begin() claims it, and GPIO16 because
+// pulling it low could reset the ESP8266.
+static const int8_t HOLD_LOW_CANDIDATES[] = {0, 2, 4, 15};
+
+static const uint32_t SCAN_STEP_MS = 3000;
+static const int MAX_STEPS = 96;
+
+struct ScanStep {
+  int8_t dc;
+  int8_t rst;
+  uint8_t mode;
+};
+
+ScanStep scanSteps[MAX_STEPS];
+int scanStepCount = 0;
+
+bool scanRunning = false;
+int scanCurrent = -1;          // step currently shown on screen, -1 = none
+uint32_t scanLastChange = 0;
+
+// Remembers the running step across an unexpected reset, so a pin that
+// resets the chip can be identified and skipped.
+struct ScanMarker {
+  uint32_t magic;
+  int32_t step;
+};
+static const uint32_t SCAN_MARKER_MAGIC = 0x5343414E;  // "SCAN"
+static const uint32_t SCAN_MARKER_OFFSET = 32;          // RTC memory block
+int scanInterruptedAt = -1;
+
+void buildScanSteps() {
+  scanStepCount = 0;
+  for (uint8_t mode : MODE_CANDIDATES) {
+    for (int8_t dc : DC_CANDIDATES) {
+      for (int8_t rst : RST_CANDIDATES) {
+        if (rst == dc || scanStepCount >= MAX_STEPS) continue;
+        scanSteps[scanStepCount++] = {dc, rst, mode};
+      }
+    }
+  }
+}
+
+void writeScanMarker(int step) {
+  ScanMarker marker = {step >= 0 ? SCAN_MARKER_MAGIC : 0, step};
+  ESP.rtcUserMemoryWrite(SCAN_MARKER_OFFSET, reinterpret_cast<uint32_t *>(&marker),
+                         sizeof(marker));
+}
+
+void readScanMarker() {
+  ScanMarker marker;
+  ESP.rtcUserMemoryRead(SCAN_MARKER_OFFSET, reinterpret_cast<uint32_t *>(&marker),
+                        sizeof(marker));
+  if (marker.magic == SCAN_MARKER_MAGIC && marker.step >= 0 && marker.step < MAX_STEPS) {
+    scanInterruptedAt = marker.step;
+  }
+  writeScanMarker(-1);  // clear it
+}
+
+// ---------------------------------------------------------------------------
 // Config storage
 // ---------------------------------------------------------------------------
 
@@ -104,11 +172,27 @@ void setBacklight(bool on) {
   digitalWrite(cfg.bl, level ? HIGH : LOW);
 }
 
-void initDisplay() {
-  setBacklight(true);
+// (Re)creates the display driver with the given pins.
+// The driver lives in a fixed memory slot rather than being new'd and
+// deleted each time, so a long scan can't fragment the ESP8266's small heap.
+alignas(Adafruit_ST7789) static uint8_t tftStorage[sizeof(Adafruit_ST7789)];
+
+void startDisplay(int8_t dc, int8_t rst, uint8_t mode, bool holdOthersLow) {
+  if (tft) {
+    tft->~Adafruit_ST7789();
+    tft = nullptr;
+  }
+  SPI.begin();
+  if (holdOthersLow) {
+    for (int8_t pin : HOLD_LOW_CANDIDATES) {
+      if (pin == dc || pin == rst) continue;
+      pinMode(pin, OUTPUT);
+      digitalWrite(pin, LOW);
+    }
+  }
   // CS = -1: these clocks usually tie the display's chip-select to ground.
-  tft = new Adafruit_ST7789(-1, cfg.dc, cfg.rst);
-  tft->init(240, 240, cfg.spiMode);
+  tft = new (tftStorage) Adafruit_ST7789(-1, dc, rst);
+  tft->init(240, 240, mode);
   tft->setRotation(cfg.rotation);
   tft->setSPISpeed(40000000);
 }
@@ -145,6 +229,49 @@ void drawTestScreen() {
   tft->drawRect(0, 0, 240, 240, ST77XX_WHITE);
   tft->fillRect(0, 232, 8, 8, ST77XX_CYAN);
   tft->fillRect(232, 232, 8, 8, ST77XX_MAGENTA);
+}
+
+void drawScanStep(int step) {
+  if (!tft) return;
+  // Alternate the background so consecutive steps are easy to tell apart.
+  static const uint16_t COLOURS[] = {ST77XX_BLUE, ST77XX_RED, ST77XX_GREEN, ST77XX_MAGENTA};
+  tft->fillScreen(COLOURS[step % 4]);
+  tft->setTextWrap(false);
+  tft->setTextColor(ST77XX_WHITE);
+  tft->setTextSize(10);
+  String label = String(step);
+  int16_t x = (240 - (int16_t)label.length() * 60) / 2;
+  tft->setCursor(x < 0 ? 0 : x, 80);
+  tft->print(label);
+  tft->setTextSize(2);
+  tft->setCursor(40, 200);
+  tft->print("Pin scan step");
+}
+
+void showScanStep(int step) {
+  const ScanStep &s = scanSteps[step];
+  scanCurrent = step;
+  writeScanMarker(step);  // if the next lines reset the chip, we'll know which step did it
+  Serial.printf("Scan step %d: DC=%d RST=%d mode=%d\n", step, s.dc, s.rst, s.mode);
+  startDisplay(s.dc, s.rst, s.mode, true);
+  drawScanStep(step);
+  writeScanMarker(-1);
+}
+
+void stopScan() {
+  scanRunning = false;
+  writeScanMarker(-1);
+}
+
+void updateScan() {
+  if (!scanRunning || millis() - scanLastChange < SCAN_STEP_MS) return;
+  scanLastChange = millis();
+  int next = scanCurrent + 1;
+  if (next >= scanStepCount) {
+    stopScan();
+    return;
+  }
+  showScanStep(next);
 }
 
 // ---------------------------------------------------------------------------
@@ -195,17 +322,63 @@ String pinInput(const char *name, int value) {
          value + "'>";
 }
 
+String stepDescription(int step) {
+  const ScanStep &s = scanSteps[step];
+  return "DC " + String(s.dc) + ", reset " + String(s.rst) + ", SPI mode " + String(s.mode);
+}
+
+void redirectHome() {
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
 void handleRoot() {
   if (!requireLogin()) return;
 
   String html;
-  html.reserve(2600);
+  html.reserve(4200);
   html += F("<!doctype html><html><head><meta charset='utf-8'>"
-            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            "<title>SD Pro</title><style>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>");
+  if (scanRunning) html += F("<meta http-equiv='refresh' content='2'>");
+  html += F("<title>SD Pro</title><style>"
             "body{font-family:sans-serif;max-width:560px;margin:24px auto;padding:0 16px;line-height:1.5}"
             "td{padding:2px 12px 2px 0}input{width:70px}button{margin:4px 4px 4px 0;padding:6px 12px}"
-            "</style></head><body><h2>SD Pro custom firmware</h2><table>");
+            ".note{padding:8px 12px;border:1px solid #c90;border-radius:6px}"
+            "</style></head><body><h2>SD Pro custom firmware</h2>");
+
+  // ----- Pin scan -----
+  html += F("<h3>Display pin scan</h3>");
+  if (scanInterruptedAt >= 0) {
+    html += "<p class='note'>The last scan stopped when the clock restarted during step " +
+            String(scanInterruptedAt) + " (" + stepDescription(scanInterruptedAt) +
+            "). Those pins probably reset the chip. Resume to continue after it.</p>";
+  }
+  if (scanRunning) {
+    html += "<p><b>Scanning: step " + String(scanCurrent) + " of " + String(scanStepCount - 1) +
+            "</b><br>" + (scanCurrent >= 0 ? stepDescription(scanCurrent) : String("starting")) +
+            "</p><p>Watch the clock. When a big number appears, note it and press Stop.</p>"
+            "<form method='post' action='/scan/stop'><button>Stop</button></form>";
+  } else {
+    html += F("<p>Cycles through every likely pin combination, 3 seconds each (about 4 minutes). "
+              "When the right one is reached, the clock shows a big step number.</p>"
+              "<form method='post' action='/scan/start' style='display:inline'><button>Start scan</button></form>");
+    if (scanInterruptedAt >= 0) {
+      html += "<form method='post' action='/scan/start?from=" + String(scanInterruptedAt + 1) +
+              "' style='display:inline'><button>Resume from step " + String(scanInterruptedAt + 1) +
+              "</button></form>";
+    }
+    if (scanCurrent >= 0) {
+      html += "<p>Last step shown: " + String(scanCurrent) + " (" + stepDescription(scanCurrent) + ")</p>";
+    }
+    html += F("<form method='post' action='/scan/show'>Step number: "
+              "<input name='step' type='number' min='0' max='95'> "
+              "<button>Show this step</button> "
+              "<button formaction='/scan/save'>Save this step's pins and reboot</button></form>"
+              "<p><a href='/scan/table'>List of all steps</a></p>");
+  }
+
+  // ----- Status -----
+  html += F("<h3>Status</h3><table>");
   html += "<tr><td>Version</td><td>" FW_VERSION "</td></tr>";
   html += "<tr><td>Mode</td><td>" + String(apMode ? "Recovery hotspot" : "Home WiFi") + "</td></tr>";
   html += "<tr><td>IP address</td><td>" + currentIp() + "</td></tr>";
@@ -215,9 +388,11 @@ void handleRoot() {
   html += "<tr><td>Firmware size</td><td>" + String(ESP.getSketchSize()) + " bytes</td></tr>";
   html += "<tr><td>Space for next update</td><td>" + String(ESP.getFreeSketchSpace()) + " bytes</td></tr>";
   html += "<tr><td>Pin settings</td><td>" + String(usingSavedConfig ? "Saved" : "Defaults (not saved yet)") + "</td></tr>";
+
+  // ----- Manual pins -----
   html += F("</table><h3>Display pins</h3>"
-            "<p>Screen blank or garbled? Try different pins. Saving reboots the clock. "
-            "Use -1 for not connected. Data (GPIO13) and clock (GPIO14) are fixed.</p>"
+            "<p>Use -1 for not connected. Data (GPIO13) and clock (GPIO14) are fixed. "
+            "Saving reboots the clock.</p>"
             "<form method='post' action='/config'><table>");
   html += "<tr><td>DC pin</td><td>" + pinInput("dc", cfg.dc) + "</td></tr>";
   html += "<tr><td>Reset pin</td><td>" + pinInput("rst", cfg.rst) + "</td></tr>";
@@ -263,18 +438,91 @@ void handleConfig() {
   ESP.restart();
 }
 
+// Returns the requested step number, or -1 (after sending an error) if invalid.
+int stepArg() {
+  String raw = server.arg("step");
+  raw.trim();
+  int step = raw.toInt();
+  if (raw.length() == 0 || step < 0 || step >= scanStepCount) {
+    server.send(400, "text/plain", "Enter a step number between 0 and " + String(scanStepCount - 1) + ".");
+    return -1;
+  }
+  return step;
+}
+
+void handleScanStart() {
+  if (!requireLogin()) return;
+  int from = server.hasArg("from") ? server.arg("from").toInt() : 0;
+  if (from < 0 || from >= scanStepCount) from = 0;
+  scanInterruptedAt = -1;
+  scanCurrent = from - 1;
+  scanRunning = true;
+  scanLastChange = millis() - SCAN_STEP_MS;  // show the first step straight away
+  redirectHome();
+}
+
+void handleScanStop() {
+  if (!requireLogin()) return;
+  stopScan();
+  redirectHome();
+}
+
+void handleScanShow() {
+  if (!requireLogin()) return;
+  int step = stepArg();
+  if (step < 0) return;
+  stopScan();
+  showScanStep(step);
+  redirectHome();
+}
+
+void handleScanSave() {
+  if (!requireLogin()) return;
+  int step = stepArg();
+  if (step < 0) return;
+  const ScanStep &s = scanSteps[step];
+  cfg.dc = s.dc;
+  cfg.rst = s.rst;
+  cfg.spiMode = s.mode;
+  saveConfig();
+  server.send(200, "text/html",
+              "<meta http-equiv='refresh' content='8;url=/'>Saved step " + String(step) + " (" +
+                  stepDescription(step) + "). Rebooting... this page reloads in 8 seconds.");
+  delay(500);
+  ESP.restart();
+}
+
+void handleScanTable() {
+  if (!requireLogin()) return;
+  String html;
+  html.reserve(5200);
+  html += F("<!doctype html><html><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'><title>Scan steps</title>"
+            "<style>body{font-family:sans-serif;max-width:560px;margin:24px auto;padding:0 16px}"
+            "td,th{padding:2px 14px 2px 0;text-align:left}</style></head><body>"
+            "<p><a href='/'>Back</a></p><h3>Pin scan steps</h3><table>"
+            "<tr><th>Step</th><th>DC</th><th>Reset</th><th>SPI mode</th></tr>");
+  for (int i = 0; i < scanStepCount; i++) {
+    const ScanStep &s = scanSteps[i];
+    html += "<tr><td>" + String(i) + "</td><td>" + String(s.dc) + "</td><td>" + String(s.rst) +
+            "</td><td>" + String(s.mode) + "</td></tr>";
+  }
+  html += F("</table></body></html>");
+  server.send(200, "text/html", html);
+}
+
 void handleTest() {
   if (!requireLogin()) return;
+  stopScan();
+  startDisplay(cfg.dc, cfg.rst, cfg.spiMode, false);
   drawTestScreen();
-  server.sendHeader("Location", "/");
-  server.send(303);
+  redirectHome();
 }
 
 void handleBacklight() {
   if (!requireLogin()) return;
   setBacklight(server.arg("on") == "1");
-  server.sendHeader("Location", "/");
-  server.send(303);
+  redirectHome();
 }
 
 void handleReboot() {
@@ -287,6 +535,11 @@ void handleReboot() {
 void startWebServer() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/config", HTTP_POST, handleConfig);
+  server.on("/scan/start", HTTP_POST, handleScanStart);
+  server.on("/scan/stop", HTTP_POST, handleScanStop);
+  server.on("/scan/show", HTTP_POST, handleScanShow);
+  server.on("/scan/save", HTTP_POST, handleScanSave);
+  server.on("/scan/table", HTTP_GET, handleScanTable);
   server.on("/test", HTTP_POST, handleTest);
   server.on("/backlight", HTTP_POST, handleBacklight);
   server.on("/reboot", HTTP_POST, handleReboot);
@@ -302,6 +555,7 @@ void startNetworkUpdates() {
   ArduinoOTA.setHostname(HOSTNAME);
   ArduinoOTA.setPassword(OTA_PASSWORD);
   ArduinoOTA.onStart([]() {
+    stopScan();
     if (!tft) return;
     tft->fillScreen(ST77XX_BLACK);
     tft->setTextColor(ST77XX_YELLOW);
@@ -321,6 +575,8 @@ void setup() {
   Serial.println();
   Serial.println("SD Pro custom firmware v" FW_VERSION);
 
+  readScanMarker();
+  buildScanSteps();
   loadConfig();
   Serial.printf("Display pins: DC=%d RST=%d BL=%d (active %s) SPI mode %d\n", cfg.dc,
                 cfg.rst, cfg.bl, cfg.blActiveLow ? "LOW" : "HIGH", cfg.spiMode);
@@ -331,7 +587,8 @@ void setup() {
   startWebServer();
   startNetworkUpdates();
 
-  initDisplay();
+  setBacklight(true);
+  startDisplay(cfg.dc, cfg.rst, cfg.spiMode, false);
   drawTestScreen();
   Serial.println("Ready.");
 }
@@ -340,4 +597,5 @@ void loop() {
   server.handleClient();
   ArduinoOTA.handle();
   MDNS.update();
+  updateScan();
 }

@@ -77,7 +77,7 @@
 // ---------------------------------------------------------------------------
 
 static const char *FACE_CITY = "Sydney";
-static const char *FACE_NAME = "Neehal";  // small, under the spaceman
+static const char *FACE_NAME = "NEEHAL";  // small, under the spaceman
 
 // Where the weather is for (decimal degrees). Sydney CBD; find others at
 // https://www.latlong.net

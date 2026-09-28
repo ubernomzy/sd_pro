@@ -34,7 +34,7 @@ enum CardPage : uint8_t {
 struct FaceData {
   // Fixed text (set in main.cpp)
   const char *city;       // "Sydney"
-  const char *name;       // "Neehal", in small text under the spaceman
+  const char *name;       // "NEEHAL", in caps text under the spaceman
 
   // Time (from the internet)
   bool timeValid;

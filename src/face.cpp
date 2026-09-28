@@ -7,7 +7,7 @@
 //   Neehal             28 Jul 2026       <- name / date
 //   10:24 AM                 (icon)      <- time / weather icon
 //   (pin) Sydney                22°C     <- city / temperature
-//         Australia            Sunny     <- country / condition
+//                              Sunny     <- condition
 //   [ wind  18 km/h | compass ] [ leaf ] <- wind card / comfort card
 //   [ Wind speed    |   NE    ] [Pleasant]
 //                                [Climate ]
@@ -298,7 +298,6 @@ void drawHeader(Adafruit_GFX &g, const FaceData &d) {
 void drawLocation(Adafruit_GFX &g, const FaceData &d) {
   drawPin(g, LEFT, 104);
   textAt(g, &FreeSansBold9pt7b, WHITE, LEFT + 18, 116, d.city);
-  textAt(g, &FreeSans9pt7b, GREY, LEFT + 18, 134, d.country);
 }
 
 void drawWeather(Adafruit_GFX &g, const FaceData &d) {

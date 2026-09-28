@@ -40,7 +40,6 @@ The top of `src/main.cpp` has a settings block:
 static const char *FACE_GREETING = "Hello";
 static const char *FACE_NAME = "Neehal";
 static const char *FACE_CITY = "Sydney";
-static const char *FACE_COUNTRY = "Australia";
 static const char *WEATHER_QUERY = "Sydney,AU";
 static const char *TIMEZONE = "AEST-10AEDT,M10.1.0,M4.1.0/3";
 ```

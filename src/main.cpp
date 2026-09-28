@@ -64,7 +64,6 @@
 static const char *FACE_GREETING = "Hello";
 static const char *FACE_NAME = "Neehal";
 static const char *FACE_CITY = "Sydney";
-static const char *FACE_COUNTRY = "Australia";
 
 // City for the weather, as "City,CountryCode" (OpenWeatherMap search format).
 static const char *WEATHER_QUERY = "Sydney,AU";
@@ -918,7 +917,6 @@ void setup() {
   face.greeting = FACE_GREETING;
   face.name = FACE_NAME;
   face.city = FACE_CITY;
-  face.country = FACE_COUNTRY;
   face.weatherMessage = "loading...";
   face.windDeg = -1;
   nextWeatherAt = millis() + 3000;  // give the time sync a moment first

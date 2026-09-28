@@ -27,7 +27,6 @@ struct FaceData {
   const char *greeting;   // "Hello"
   const char *name;       // "Neehal"
   const char *city;       // "Sydney"
-  const char *country;    // "Australia"
 
   // Time (from the internet)
   bool timeValid;

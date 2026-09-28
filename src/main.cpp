@@ -8,6 +8,8 @@
 // v0.4.0: sends the seller's own ST7789 startup table (panel voltages, gate
 //         lines, gamma) and fixes the SPI mode setting: on the ESP8266,
 //         SPI_MODE3 is 0x11, so passing the number 3 actually gave mode 1.
+//         The scan then worked on every SPI mode 3 step and no mode 0 step.
+// v0.4.1: SPI mode 3 is now the default, so the screen works out of the box.
 //
 // Pins from the seller's firmware (display setup code at 0x4021a24b):
 //   CS = GPIO15, DC = GPIO0, RST = GPIO2, backlight = GPIO5 (on when LOW)
@@ -54,7 +56,7 @@ struct DisplayConfig {
   int8_t cs;             // chip-select pin (-1 = not connected)
   int8_t bl;             // backlight pin (-1 = not connected)
   uint8_t blActiveLow;   // 1 = backlight turns on when the pin is LOW
-  uint8_t spiMode;       // 0 with a chip-select pin; 3 for boards without one
+  uint8_t spiMode;       // 0-3; this clock needs 3
   uint8_t rotation;      // 0-3
   uint8_t initTable;     // 1 = seller's startup table, 0 = library's generic one
 };
@@ -62,7 +64,8 @@ struct DisplayConfig {
 // Bumped whenever the layout changes ("SDP1" v0.1-0.2, "SDP2" v0.3,
 // "SDP3" v0.4) so older saved settings are ignored instead of misread.
 static const uint32_t CONFIG_MAGIC = 0x53445033;
-static const DisplayConfig DEFAULT_CONFIG = {CONFIG_MAGIC, 0, 2, 15, 5, 1, 0, 0, 1};
+// Confirmed on the clock (v0.4.0 scan, steps 2/3/6/7): only SPI mode 3 works.
+static const DisplayConfig DEFAULT_CONFIG = {CONFIG_MAGIC, 0, 2, 15, 5, 1, 3, 0, 1};
 
 // The seller's ST7789 startup sequence, copied byte for byte from their
 // firmware (file offset 0x6a308 in both v1.0.4 and v1.0.6). Format is the

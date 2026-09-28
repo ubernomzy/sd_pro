@@ -4,7 +4,7 @@ Custom firmware for the SD Pro WiFi weather clock (ESP8266, 4MB flash,
 1.54" 240x240 ST7789 LCD). Forked from JUZIPi-tech/SD_PRO, which only
 publishes compiled firmware. The seller's files are kept in `original/`.
 
-## Current version: 0.6.0 (rotating weather card)
+## Current version: 0.7.0 (file browser)
 
 Progress so far:
 
@@ -38,6 +38,13 @@ Progress so far:
   [Open-Meteo](https://open-meteo.com/): free for non-commercial use, no
   API key, data licensed CC BY 4.0 (credited on the status page).
   OpenWeatherMap's free feed has no UV index
+- v0.7.0: read-only file browser at `/files`, to download the seller's
+  GIFs and photos that are still in the clock's storage (the spaceman
+  animation is one of them). The file system is mounted with auto-format
+  off, and nothing writes to it. To make room: the pin scan is gone (its
+  job is done) and weather uses plain HTTP instead of HTTPS (public data;
+  the HTTPS code never checked certificates and cost 82KB). Firmware is
+  now about 431KB
 
 ## Personalise it
 
@@ -66,9 +73,8 @@ The layout itself is in `src/face.cpp` (positions, colours, fonts, icons).
   firmware size and display pins, with buttons to switch between the
   clock face and a test screen and to refresh the weather
 - Display pins can be changed on the status page without rebuilding
-- Pin scan: tries 8 variants of the seller's pins (chip-select on/off,
-  SPI mode 0/3, reset on/off), showing a big step number on screen.
-  `/scan/table` lists the pins for every step
+- Files page at `/files`: lists everything in the clock's 3MB storage;
+  click a file to open or download it. Read-only
 
 Display pins, from the seller's firmware:
 
@@ -98,7 +104,7 @@ in `src/main.cpp`; the status page can switch back to the generic table.
    `secrets.h` is in `.gitignore` and must never be committed. (Weather
    needs no key.)
 2. Build: `pio run -e sdpro`
-3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 490KB).
+3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 431KB).
    The build fails on purpose if it goes over 500KB (`check_size.py`).
 
 ## Flash

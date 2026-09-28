@@ -4,7 +4,7 @@ Custom firmware for the SD Pro WiFi weather clock (ESP8266, 4MB flash,
 1.54" 240x240 ST7789 LCD). Forked from JUZIPi-tech/SD_PRO, which only
 publishes compiled firmware. The seller's files are kept in `original/`.
 
-## Current version: 0.4.2 (display working, upright)
+## Current version: 0.5.0 (clock face)
 
 Progress so far:
 
@@ -26,14 +26,36 @@ Progress so far:
 - v0.4.1 makes SPI mode 3 the default
 - The image was upside down: the panel is mounted rotated 180 degrees.
   v0.4.2 makes rotation 2 the default
+- v0.5.0 adds the clock face: greeting and name, date, time from the
+  internet (Sydney time, daylight saving handled), weather from
+  OpenWeatherMap over HTTPS (icon, temperature, condition, wind speed and
+  direction, comfort). Network uploads from PlatformIO and `sdpro.local`
+  were removed to keep the firmware under 500KB
+
+## Personalise it
+
+The top of `src/main.cpp` has a settings block:
+
+```cpp
+static const char *FACE_GREETING = "Hello";
+static const char *FACE_NAME = "Neehal";
+static const char *FACE_CITY = "Sydney";
+static const char *FACE_COUNTRY = "Australia";
+static const char *WEATHER_QUERY = "Sydney,AU";
+static const char *TIMEZONE = "AEST-10AEDT,M10.1.0,M4.1.0/3";
+```
+
+The layout itself is in `src/face.cpp` (positions, colours, fonts, icons).
 
 ## Features
 
+- Clock face: name, date, time, weather, wind, comfort
 - Joins your 2.4GHz home WiFi. If it can't within 20 seconds, it opens a
   recovery hotspot `SDPro-Recovery` at http://192.168.4.1
 - Password-protected firmware update page at `/update` (user `admin`)
-- Status page at `/` showing IP, memory, firmware size and display pins
-- Draws "Hello Hal", colour bars and the IP address on the screen
+- Status page at `/` showing time sync, weather status, IP, memory,
+  firmware size and display pins, with buttons to switch between the
+  clock face and a test screen and to refresh the weather
 - Display pins can be changed on the status page without rebuilding
 - Pin scan: tries 8 variants of the seller's pins (chip-select on/off,
   SPI mode 0/3, reset on/off), showing a big step number on screen.
@@ -63,10 +85,12 @@ in `src/main.cpp`; the status page can switch back to the generic table.
 ## Build
 
 1. Copy `include/secrets.example.h` to `include/secrets.h` and fill in
-   your WiFi name, WiFi password, update password and recovery password.
-   `secrets.h` is in `.gitignore` and must never be committed.
+   your WiFi name, WiFi password, update password, recovery password and
+   (optional) OpenWeatherMap key. `secrets.h` is in `.gitignore` and must
+   never be committed.
 2. Build: `pio run -e sdpro`
-3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 360KB).
+3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 490KB).
+   The build fails on purpose if it goes over 500KB (`check_size.py`).
 
 ## Flash
 
@@ -75,13 +99,13 @@ in `src/main.cpp`; the status page can switch back to the generic table.
   `cp .pio/build/sdpro/firmware.bin SDPro_custom.bin`
   then upload that file from the Firmware Update section of the settings page.
 - After that (from this firmware): open `http://<clock-ip>/update`,
-  log in as `admin`, choose `firmware.bin`, upload. Or from the terminal:
-  `SDPRO_OTA_PASSWORD='...' pio run -e sdpro_wifi -t upload`
+  log in as `admin`, choose `firmware.bin`, upload.
 
 ## Rules
 
 1. Every version must keep the `/update` page (`updateServer.setup(...)`).
    Without it the clock can never be updated again.
-2. Keep firmware under about 500KB. The flash layout (`eagle.flash.4m3m.ld`)
-   leaves roughly half of the 1MB firmware area for each update.
+2. Keep firmware under 500KB. An update is written beside the running
+   firmware inside the ~1MB firmware area (`eagle.flash.4m3m.ld`), so each
+   version can use about half. `check_size.py` enforces this at build time.
 3. Only merge to `main` after a version has been tested on the clock.

@@ -11,6 +11,14 @@
 //         The scan then worked on every SPI mode 3 step and no mode 0 step.
 // v0.4.1: SPI mode 3 is now the default, so the screen works out of the box.
 // v0.4.2: rotation 2 is the default: the panel is mounted upside down.
+// v0.5.0: the clock face (see face.cpp): greeting and name, date, time from
+//         the internet in Sydney time, weather from OpenWeatherMap over HTTPS.
+//         Removed PlatformIO-over-WiFi uploads and sdpro.local (mDNS) to keep
+//         the firmware under 500KB; updates go through the /update page.
+//
+// Size rule: an update is written beside the running firmware, so each
+// version must stay under ~500KB (about half the 1MB firmware area). The
+// build checks this (check_size.py).
 //
 // Pins from the seller's firmware (display setup code at 0x4021a24b):
 //   CS = GPIO15, DC = GPIO0, RST = GPIO2, backlight = GPIO5 (on when LOW)
@@ -22,12 +30,16 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPUpdateServer.h>
-#include <ESP8266mDNS.h>
-#include <ArduinoOTA.h>
 #include <EEPROM.h>
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClientSecureBearSSL.h>
+#include <ArduinoJson.h>
+#include <time.h>
+
+#include "face.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -39,11 +51,36 @@
 #define FW_VERSION "dev"
 #endif
 
+// Your own OpenWeatherMap key goes in secrets.h. Without it the clock still
+// runs; the weather area just says so.
+#ifndef OWM_API_KEY
+#define OWM_API_KEY ""
+#endif
+
+// ---------------------------------------------------------------------------
+// Clock face settings: change these to personalise the clock
+// ---------------------------------------------------------------------------
+
+static const char *FACE_GREETING = "Hello";
+static const char *FACE_NAME = "Neehal";
+static const char *FACE_CITY = "Sydney";
+static const char *FACE_COUNTRY = "Australia";
+
+// City for the weather, as "City,CountryCode" (OpenWeatherMap search format).
+static const char *WEATHER_QUERY = "Sydney,AU";
+
+// Sydney time, switching to daylight saving on the first Sunday of October
+// and back on the first Sunday of April.
+static const char *TIMEZONE = "AEST-10AEDT,M10.1.0,M4.1.0/3";
+
+static const uint32_t WEATHER_REFRESH_MS = 10UL * 60 * 1000;  // every 10 minutes
+static const uint32_t WEATHER_RETRY_MS = 60UL * 1000;         // after a failure
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
 
-static const char *HOSTNAME = "sdpro";          // reachable as sdpro.local
+static const char *HOSTNAME = "sdpro";          // name shown in your router's device list
 static const char *AP_NAME = "SDPro-Recovery";   // fallback hotspot name
 static const char *WEB_USER = "admin";
 static const uint32_t WIFI_TIMEOUT_MS = 20000;
@@ -125,6 +162,18 @@ ESP8266WebServer server(80);
 ESP8266HTTPUpdateServer updateServer;
 ClockDisplay *tft = nullptr;
 bool apMode = false;
+
+// What the screen is showing. The clock face updates itself only in FACE.
+enum Screen { SCREEN_FACE, SCREEN_TEST, SCREEN_SCAN };
+Screen screen = SCREEN_FACE;
+
+FaceData face;
+bool faceNeedsRedraw = true;
+int lastMinuteShown = -1;
+int lastDayShown = -1;
+
+uint32_t nextWeatherAt = 0;
+String weatherStatus = "Not fetched yet";
 
 // ---------------------------------------------------------------------------
 // Pin scan
@@ -271,9 +320,10 @@ void drawTestScreen() {
 
   tft->setTextWrap(false);
   tft->setTextColor(ST77XX_WHITE);
-  tft->setTextSize(4);
+  tft->setTextSize(3);
   tft->setCursor(12, 70);
-  tft->print("Hello Hal");
+  tft->print("Hello ");
+  tft->print(FACE_NAME);
 
   tft->setTextSize(2);
   tft->setTextColor(ST77XX_YELLOW);
@@ -331,6 +381,195 @@ void updateScan() {
     return;
   }
   showScanStep(next);
+}
+
+// ---------------------------------------------------------------------------
+// Time
+// ---------------------------------------------------------------------------
+
+// Fills the time and date fields of `face` from the system clock, which the
+// ESP8266 keeps in sync with internet time servers after configTime().
+void updateFaceTime() {
+  time_t now = time(nullptr);
+  face.timeValid = now > 1700000000;  // before sync the clock reads 1970
+  if (!face.timeValid) return;
+
+  struct tm t;
+  localtime_r(&now, &t);
+  static const char *DAYS[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+  static const char *MONTHS[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  face.hour24 = t.tm_hour;
+  face.minute = t.tm_min;
+  snprintf(face.dayName, sizeof(face.dayName), "%s", DAYS[t.tm_wday]);
+  snprintf(face.date, sizeof(face.date), "%d %s %d", t.tm_mday, MONTHS[t.tm_mon],
+           t.tm_year + 1900);
+}
+
+// ---------------------------------------------------------------------------
+// Weather
+// ---------------------------------------------------------------------------
+
+// Turns an OpenWeatherMap condition code into an icon and a short label.
+// Codes: https://openweathermap.org/weather-conditions
+void describeWeather(int id, const char *mainText, bool night) {
+  const char *label = mainText;
+  WeatherIcon icon = ICON_CLOUD;
+  if (id >= 200 && id < 300) {
+    label = "Storm", icon = ICON_STORM;
+  } else if (id >= 300 && id < 400) {
+    label = "Drizzle", icon = ICON_RAIN;
+  } else if (id >= 500 && id < 600) {
+    label = id >= 502 && id <= 504 ? "Heavy rain" : "Rain", icon = ICON_RAIN;
+  } else if (id >= 600 && id < 700) {
+    label = "Snow", icon = ICON_SNOW;
+  } else if (id >= 700 && id < 800) {
+    icon = ICON_MIST;  // Mist, Fog, Haze, Smoke... keep OpenWeatherMap's word
+  } else if (id == 800) {
+    label = night ? "Clear" : "Sunny", icon = night ? ICON_MOON : ICON_SUN;
+  } else if (id == 801 || id == 802) {
+    label = "Partly cloudy", icon = night ? ICON_PARTLY_NIGHT : ICON_PARTLY_DAY;
+  } else if (id > 802) {
+    label = "Cloudy", icon = ICON_CLOUD;
+  }
+  snprintf(face.condition, sizeof(face.condition), "%s", label);
+  face.icon = icon;
+}
+
+// Downloads current weather. Returns true if the face needs redrawing.
+bool fetchWeather() {
+  if (strlen(OWM_API_KEY) == 0) {
+    face.weatherValid = false;
+    face.weatherMessage = "needs key";
+    weatherStatus = "No OWM_API_KEY in secrets.h";
+    nextWeatherAt = millis() + WEATHER_REFRESH_MS;
+    return true;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    weatherStatus = "Waiting for WiFi";
+    nextWeatherAt = millis() + WEATHER_RETRY_MS;
+    return false;
+  }
+
+  String query = WEATHER_QUERY;
+  query.replace(" ", "%20");
+  String url = String("https://api.openweathermap.org/data/2.5/weather?units=metric&q=") +
+               query + "&appid=" + OWM_API_KEY;
+
+  // HTTPS keeps the API key from being read off the network. setInsecure()
+  // skips certificate checks (the clock has no certificate store); fine for
+  // weather data, but it means the connection isn't protected from a
+  // deliberate impersonator.
+  BearSSL::WiFiClientSecure client;
+  client.setInsecure();
+  if (client.probeMaxFragmentLength("api.openweathermap.org", 443, 1024)) {
+    client.setBufferSizes(1024, 1024);  // saves ~15KB of RAM if the server allows it
+  }
+
+  HTTPClient http;
+  http.useHTTP10(true);  // plain (not chunked) response, easier to stream-parse
+  http.setTimeout(8000);
+  bool changed = false;
+  if (!http.begin(client, url)) {
+    weatherStatus = "Could not start request";
+  } else {
+    int code = http.GET();
+    if (code == 200) {
+      // Only keep the fields we use, so the response fits in little memory.
+      JsonDocument filter;
+      filter["main"]["temp"] = true;
+      filter["main"]["humidity"] = true;
+      filter["weather"][0]["id"] = true;
+      filter["weather"][0]["main"] = true;
+      filter["wind"]["speed"] = true;
+      filter["wind"]["deg"] = true;
+      filter["sys"]["sunrise"] = true;
+      filter["sys"]["sunset"] = true;
+      filter["dt"] = true;
+
+      JsonDocument doc;
+      DeserializationError err =
+          deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+      if (err) {
+        weatherStatus = String("Could not read response: ") + err.c_str();
+      } else {
+        float temp = doc["main"]["temp"] | 0.0f;
+        int humidity = doc["main"]["humidity"] | 0;
+        long dt = doc["dt"] | 0L;
+        long sunrise = doc["sys"]["sunrise"] | 0L;
+        long sunset = doc["sys"]["sunset"] | 0L;
+        bool night = sunrise && sunset && (dt < sunrise || dt > sunset);
+
+        face.tempC = lroundf(temp);
+        describeWeather(doc["weather"][0]["id"] | 800, doc["weather"][0]["main"] | "", night);
+        face.windKmh = lroundf((doc["wind"]["speed"] | 0.0f) * 3.6f);
+        face.windDeg = doc["wind"]["deg"] | -1;
+        bool good;
+        describeComfort(face.tempC, humidity, face.comfort, sizeof(face.comfort), good);
+        face.comfortGood = good;
+        face.weatherValid = true;
+        changed = true;
+
+        char when[6] = "--:--";
+        if (face.timeValid) snprintf(when, sizeof(when), "%02d:%02d", face.hour24, face.minute);
+        weatherStatus = String("OK at ") + when + ": " + face.tempC + " C, " + face.condition +
+                        ", humidity " + humidity + "%, wind " + face.windKmh + " km/h";
+      }
+    } else if (code == 401) {
+      weatherStatus = "Key rejected (401). New keys can take up to 2 hours to activate.";
+    } else if (code == 404) {
+      weatherStatus = "City not found (404). Check WEATHER_QUERY.";
+    } else {
+      weatherStatus = String("Request failed: ") + code + " " + HTTPClient::errorToString(code);
+    }
+    http.end();
+  }
+
+  if (changed) {
+    nextWeatherAt = millis() + WEATHER_REFRESH_MS;
+  } else {
+    nextWeatherAt = millis() + WEATHER_RETRY_MS;
+    if (!face.weatherValid) {  // keep showing old data if we have some
+      face.weatherMessage = "unavailable";
+      changed = true;
+    }
+  }
+  Serial.println("Weather: " + weatherStatus);
+  return changed;
+}
+
+// ---------------------------------------------------------------------------
+// Screens
+// ---------------------------------------------------------------------------
+
+void showFace() {
+  screen = SCREEN_FACE;
+  faceNeedsRedraw = true;
+}
+
+// Called every loop: keeps the clock face current without redrawing more
+// than needed (a full redraw flickers briefly; the time alone doesn't).
+void updateFace() {
+  if ((int32_t)(millis() - nextWeatherAt) >= 0) {
+    if (fetchWeather()) faceNeedsRedraw = true;
+  }
+  if (screen != SCREEN_FACE || !tft) return;
+
+  updateFaceTime();
+  int minute = face.timeValid ? face.hour24 * 60 + face.minute : -2;
+  int day = face.timeValid ? (int)(time(nullptr) / 86400) : -2;
+  if (day != lastDayShown) faceNeedsRedraw = true;  // new date (or time just synced)
+
+  if (faceNeedsRedraw) {
+    drawFace(*tft, face);
+    faceNeedsRedraw = false;
+  } else if (minute != lastMinuteShown) {
+    drawFaceTime(*tft, face);
+  } else {
+    return;
+  }
+  lastMinuteShown = minute;
+  lastDayShown = day;
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +645,21 @@ void handleRoot() {
             ".note{padding:8px 12px;border:1px solid #c90;border-radius:6px}"
             "</style></head><body><h2>SD Pro custom firmware</h2>");
 
+  // ----- Clock face -----
+  html += F("<h3>Clock face</h3><table>");
+  html += "<tr><td>Time</td><td>" +
+          String(face.timeValid ? String(face.dayName) + " " + face.date + ", " +
+                                      (face.hour24 < 10 ? "0" : "") + face.hour24 + ":" +
+                                      (face.minute < 10 ? "0" : "") + face.minute
+                                : String("not synced yet")) +
+          "</td></tr>";
+  html += "<tr><td>Weather</td><td>" + weatherStatus + "</td></tr>";
+  html += "<tr><td>Screen</td><td>" +
+          String(screen == SCREEN_FACE ? "Clock face" : screen == SCREEN_TEST ? "Test screen" : "Pin scan") +
+          "</td></tr></table>"
+          "<form method='post' action='/face' style='display:inline'><button>Show clock face</button></form>"
+          "<form method='post' action='/weather' style='display:inline'><button>Refresh weather</button></form>";
+
   // ----- Pin scan -----
   html += F("<h3>Display pin scan</h3>");
   if (scanInterruptedAt >= 0) {
@@ -470,7 +724,7 @@ void handleRoot() {
           String(cfg.initTable) + "'> (1 = seller's, 0 = generic)</td></tr>";
   html += F("</table><button type='submit'>Save and reboot</button></form>"
             "<h3>Actions</h3>"
-            "<form method='post' action='/test' style='display:inline'><button>Redraw test screen</button></form>"
+            "<form method='post' action='/test' style='display:inline'><button>Show test screen</button></form>"
             "<form method='post' action='/backlight?on=1' style='display:inline'><button>Backlight on</button></form>"
             "<form method='post' action='/backlight?on=0' style='display:inline'><button>Backlight off</button></form>"
             "<form method='post' action='/reboot' style='display:inline'><button>Reboot</button></form>"
@@ -525,6 +779,7 @@ void handleScanStart() {
   scanInterruptedAt = -1;
   scanCurrent = from - 1;
   scanRunning = true;
+  screen = SCREEN_SCAN;
   scanLastChange = millis() - SCAN_STEP_MS;  // show the first step straight away
   redirectHome();
 }
@@ -532,6 +787,7 @@ void handleScanStart() {
 void handleScanStop() {
   if (!requireLogin()) return;
   stopScan();
+  screen = SCREEN_SCAN;  // leave the last step on screen until "Show clock face"
   redirectHome();
 }
 
@@ -540,6 +796,7 @@ void handleScanShow() {
   int step = stepArg();
   if (step < 0) return;
   stopScan();
+  screen = SCREEN_SCAN;
   showScanStep(step);
   redirectHome();
 }
@@ -583,8 +840,24 @@ void handleScanTable() {
 void handleTest() {
   if (!requireLogin()) return;
   stopScan();
+  screen = SCREEN_TEST;
   startDisplay(cfg.dc, cfg.rst, cfg.cs, cfg.spiMode);
   drawTestScreen();
+  redirectHome();
+}
+
+void handleFace() {
+  if (!requireLogin()) return;
+  stopScan();
+  // A scan step may have left the display on different pins.
+  startDisplay(cfg.dc, cfg.rst, cfg.cs, cfg.spiMode);
+  showFace();
+  redirectHome();
+}
+
+void handleWeather() {
+  if (!requireLogin()) return;
+  nextWeatherAt = millis();  // fetch on the next loop
   redirectHome();
 }
 
@@ -610,6 +883,8 @@ void startWebServer() {
   server.on("/scan/save", HTTP_POST, handleScanSave);
   server.on("/scan/table", HTTP_GET, handleScanTable);
   server.on("/test", HTTP_POST, handleTest);
+  server.on("/face", HTTP_POST, handleFace);
+  server.on("/weather", HTTP_POST, handleWeather);
   server.on("/backlight", HTTP_POST, handleBacklight);
   server.on("/reboot", HTTP_POST, handleReboot);
   server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
@@ -617,23 +892,6 @@ void startWebServer() {
   // The most important line in this file: without it the clock can't be updated again.
   updateServer.setup(&server, "/update", WEB_USER, OTA_PASSWORD);
   server.begin();
-}
-
-void startNetworkUpdates() {
-  // Lets PlatformIO upload over WiFi: pio run -e sdpro_wifi -t upload
-  ArduinoOTA.setHostname(HOSTNAME);
-  ArduinoOTA.setPassword(OTA_PASSWORD);
-  ArduinoOTA.onStart([]() {
-    stopScan();
-    if (!tft) return;
-    tft->fillScreen(ST77XX_BLACK);
-    tft->setTextColor(ST77XX_YELLOW);
-    tft->setTextSize(3);
-    tft->setCursor(20, 105);
-    tft->print("Updating...");
-  });
-  ArduinoOTA.begin();
-  MDNS.addService("http", "tcp", 80);
 }
 
 // ---------------------------------------------------------------------------
@@ -655,17 +913,24 @@ void setup() {
   // stop the clock from accepting the next firmware.
   startWifi();
   startWebServer();
-  startNetworkUpdates();
+  configTime(TIMEZONE, "pool.ntp.org", "time.google.com");
+
+  face.greeting = FACE_GREETING;
+  face.name = FACE_NAME;
+  face.city = FACE_CITY;
+  face.country = FACE_COUNTRY;
+  face.weatherMessage = "loading...";
+  face.windDeg = -1;
+  nextWeatherAt = millis() + 3000;  // give the time sync a moment first
 
   setBacklight(true);
   startDisplay(cfg.dc, cfg.rst, cfg.cs, cfg.spiMode);
-  drawTestScreen();
+  showFace();
   Serial.println("Ready.");
 }
 
 void loop() {
   server.handleClient();
-  ArduinoOTA.handle();
-  MDNS.update();
   updateScan();
+  updateFace();
 }

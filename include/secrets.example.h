@@ -15,3 +15,10 @@
 // it creates a WiFi network called "SDPro-Recovery" with this password
 // (at least 8 characters). Join it and open http://192.168.4.1
 #define AP_PASSWORD "choose-8-plus-chars"
+
+// Your own OpenWeatherMap key for the weather on the clock face.
+// Free sign-up: https://home.openweathermap.org/users/sign_up
+// then copy it from https://home.openweathermap.org/api_keys
+// (new keys can take up to 2 hours to start working).
+// Leave this line out and the clock runs without weather.
+#define OWM_API_KEY "your-openweathermap-key"

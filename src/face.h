@@ -26,7 +26,7 @@ enum WeatherIcon : uint8_t {
 enum CardPage : uint8_t {
   CARD_WIND,
   CARD_PRESSURE,
-  CARD_UV,
+  CARD_CONDITION,
   CARD_FEELS_LIKE,
   CARD_PAGE_COUNT,
 };
@@ -51,7 +51,6 @@ struct FaceData {
   int windKmh;
   int windDeg;            // 0-359, direction the wind comes from; -1 = unknown
   int pressureHpa;        // sea-level pressure
-  float uvIndex;
   int feelsLikeC;
 
   // Which card page is showing
@@ -70,7 +69,7 @@ void drawFaceCard(Adafruit_GFX &gfx, const FaceData &d);
 // ----- Spaceman animation (the seller's /0.gif), right of the bottom card -----
 
 constexpr int16_t SPACEMAN_X = 171;  // in the gap right of the card
-constexpr int16_t SPACEMAN_Y = 152;  // centred on the card's height
+constexpr int16_t SPACEMAN_Y = 146;  // centred under the temperature
 
 uint8_t spacemanFrameCount();
 uint16_t spacemanFrameMs();          // how long each frame shows, from the GIF

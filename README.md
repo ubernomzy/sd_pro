@@ -4,7 +4,7 @@ Custom firmware for the SD Pro WiFi weather clock (ESP8266, 4MB flash,
 1.54" 240x240 ST7789 LCD). Forked from JUZIPi-tech/SD_PRO, which only
 publishes compiled firmware. The seller's files are kept in `original/`.
 
-## Current version: 0.9.0 (city on top, bigger card)
+## Current version: 0.10.0 (weather condition card)
 
 Progress so far:
 
@@ -58,6 +58,12 @@ Progress so far:
   was 148 x 80) with a bigger compass, pressure dial and UV scale, and
   the spaceman shrinks to 64 x 64 (set by `SIZE` in
   `tools/make_spaceman.py`)
+- v0.10.0: the UV page is replaced by a Weather page showing the
+  condition ("Partly cloudy", on two lines when needed), so the condition
+  no longer sits under the temperature. The weather icon is 25% smaller,
+  giving room below the date. The card now starts just under the time
+  (162 x 122): page name and icon on top, a big value and a dial below.
+  UV is no longer fetched
 
 ## Personalise it
 
@@ -79,8 +85,9 @@ rebuild. Colour is dropped (16 greys), and keep an eye on the size check.
 
 ## Features
 
-- Clock face: name, date, time, weather, a card rotating between wind,
-  pressure, UV index and feels-like temperature, and the animated spaceman
+- Clock face: city, date, time, weather, a card rotating between wind,
+  pressure, weather condition and feels-like temperature, and the animated
+  spaceman
 - Joins your 2.4GHz home WiFi. If it can't within 20 seconds, it opens a
   recovery hotspot `SDPro-Recovery` at http://192.168.4.1
 - Password-protected firmware update page at `/update` (user `admin`)
@@ -119,7 +126,7 @@ in `src/main.cpp`; the status page can switch back to the generic table.
    `secrets.h` is in `.gitignore` and must never be committed. (Weather
    needs no key.)
 2. Build: `pio run -e sdpro`
-3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 449KB).
+3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 454KB).
    The build fails on purpose if it goes over 500KB (`check_size.py`).
 
 ## Flash

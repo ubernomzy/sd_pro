@@ -31,6 +31,9 @@
 // v0.8.1: "Hello" removed; the name is smaller and the day and date bigger.
 // v0.9.0: the city replaces the name at the top; the bottom card moves up
 //         and widens into the space that frees, and the spaceman is 64x64.
+// v0.10.0: the UV page is replaced by a weather condition page, so the
+//          condition leaves the top-right; smaller weather icon; the card
+//          grows up to just below the time.
 //
 // Size rule: an update is written beside the running firmware, so each
 // version must stay under ~500KB (about half the 1MB firmware area). The
@@ -373,7 +376,7 @@ bool fetchWeather() {
   String url = String("http://api.open-meteo.com/v1/forecast?latitude=") + WEATHER_LATITUDE +
                "&longitude=" + WEATHER_LONGITUDE +
                "&current=temperature_2m,apparent_temperature,is_day,weather_code,"
-               "pressure_msl,wind_speed_10m,wind_direction_10m,uv_index"
+               "pressure_msl,wind_speed_10m,wind_direction_10m"
                "&wind_speed_unit=kmh&timezone=auto";
 
   // Plain HTTP: the data is public weather and nothing secret is sent.
@@ -393,7 +396,7 @@ bool fetchWeather() {
       JsonDocument filter;
       JsonObject want = filter["current"].to<JsonObject>();
       for (const char *key : {"temperature_2m", "apparent_temperature", "is_day", "weather_code",
-                              "pressure_msl", "wind_speed_10m", "wind_direction_10m", "uv_index"}) {
+                              "pressure_msl", "wind_speed_10m", "wind_direction_10m"}) {
         want[key] = true;
       }
 
@@ -412,7 +415,6 @@ bool fetchWeather() {
         face.pressureHpa = lroundf(now["pressure_msl"] | 0.0f);
         face.windKmh = lroundf(now["wind_speed_10m"] | 0.0f);
         face.windDeg = now["wind_direction_10m"] | -1;
-        face.uvIndex = now["uv_index"] | 0.0f;
         face.weatherValid = true;
         changed = true;
 
@@ -421,7 +423,7 @@ bool fetchWeather() {
         weatherStatus = String("OK at ") + when + ": " + face.tempC + " C (feels " +
                         face.feelsLikeC + "), " + face.condition + ", wind " + face.windKmh +
                         " km/h " + (face.windDeg >= 0 ? compassPoint(face.windDeg) : "") + ", " +
-                        face.pressureHpa + " hPa, UV " + String(face.uvIndex, 1);
+                        face.pressureHpa + " hPa";
       }
     } else if (code == 400) {
       weatherStatus = "Request rejected (400). Check WEATHER_LATITUDE / WEATHER_LONGITUDE.";

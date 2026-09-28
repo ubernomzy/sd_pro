@@ -7,10 +7,9 @@
 //                      28 Jul 2026       <- date
 //   10:24 AM                 (icon)      <- time / weather icon
 //                               22°C     <- temperature
-//                              Sunny     <- condition
-//   [ icon  value unit | dial ]          <- rotating card: wind, pressure,
-//   [ Label            |      ] (spaceman)  UV index, feels like
-//   [      o o o o            ]          <- page dots
+//   [ icon  Label             ]          <- rotating card: wind, pressure,
+//   [ Value         |  dial   ] (spaceman)  weather condition, feels like
+//   [   o o o o     |         ]          <- page dots
 
 #include "face.h"
 #include "spaceman_data.h"
@@ -23,6 +22,7 @@
 #include <Fonts/FreeSans12pt7b.h>
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
+#include <Fonts/FreeSansBold18pt7b.h>
 #include <Fonts/FreeSansBold24pt7b.h>
 
 namespace {
@@ -52,11 +52,6 @@ constexpr uint16_t WARM_ORANGE = rgb(255, 140, 40);
 constexpr uint16_t COOL_BLUE = rgb(90, 170, 255);
 constexpr uint16_t THERMO_RED = rgb(240, 80, 60);
 
-// UV index bands (WHO): Low 0-2, Moderate 3-5, High 6-7, Very high 8-10, Extreme 11+
-constexpr uint16_t UV_COLOURS[] = {rgb(80, 200, 90), rgb(240, 210, 40), rgb(255, 140, 0),
-                                   rgb(230, 50, 50), rgb(170, 90, 230)};
-constexpr const char *UV_LEVELS[] = {"Low", "Moderate", "High", "Very high", "Extreme"};
-
 // ---------------------------------------------------------------------------
 // Layout
 // ---------------------------------------------------------------------------
@@ -73,22 +68,27 @@ constexpr int16_t TIME_H = 46;
 constexpr int16_t TIME_BASELINE = 40;  // inside the canvas
 
 constexpr int16_t WEATHER_ICON_X = 205;
-constexpr int16_t WEATHER_ICON_Y = 70;
+constexpr int16_t WEATHER_ICON_Y = 78;
+constexpr float WEATHER_ICON_SCALE = 0.75f;  // icons are ~40px at 1.0
+constexpr int16_t TEMP_BASELINE = 116;
 
-// The rotating card. Left of the divider: icon, value, label. Right: a dial.
+// The rotating card, below the time and left of the spaceman.
+//   [ icon  Label                  ]   <- header row
+//   [ Value unit      |    dial    ]   <- body: big value, dial on the right
+//   [   o o o o       |            ]   <- page dots
 constexpr int16_t CARD_X = 4;
-// It starts just below the weather condition text and ends where the
-// spaceman begins.
-constexpr int16_t CARD_Y = 138;
+constexpr int16_t CARD_Y = 108;
 constexpr int16_t CARD_W = 162;
-constexpr int16_t CARD_H = 92;
-constexpr int16_t CARD_DIVIDER_X = CARD_X + CARD_W - 48;
+constexpr int16_t CARD_H = 122;
+constexpr int16_t CARD_ICON_Y = CARD_Y + 12;
+constexpr int16_t CARD_LABEL_X = CARD_X + 44;
+constexpr int16_t CARD_LABEL_BASELINE = CARD_Y + 30;
+constexpr int16_t CARD_BODY_Y = CARD_Y + 42;  // top of the body area
+constexpr int16_t CARD_DIVIDER_X = CARD_X + CARD_W - 62;
 constexpr int16_t CARD_DIAL_X = CARD_DIVIDER_X + (CARD_X + CARD_W - CARD_DIVIDER_X) / 2;
-constexpr int16_t CARD_ICON_Y = CARD_Y + 14;
-constexpr int16_t CARD_VALUE_X = CARD_X + 44;
-constexpr int16_t CARD_VALUE_BASELINE = CARD_Y + 36;
-constexpr int16_t CARD_LABEL_BASELINE = CARD_Y + 66;
-constexpr int16_t CARD_DOTS_Y = CARD_Y + CARD_H - 8;
+constexpr int16_t CARD_VALUE_X = CARD_X + 10;
+constexpr int16_t CARD_VALUE_BASELINE = CARD_Y + 82;
+constexpr int16_t CARD_DOTS_Y = CARD_Y + CARD_H - 10;
 
 // ---------------------------------------------------------------------------
 // Text helpers
@@ -142,99 +142,123 @@ void thickLine(Adafruit_GFX &g, float x0, float y0, float x1, float y1, uint16_t
   }
 }
 
-// Temperature like "22°C" in FreeSansBold12pt, with a hand-drawn degree
-// sign (the fonts are ASCII only). Returns the width it takes up.
-int16_t temperatureWidth(Adafruit_GFX &g, int value) {
+// Temperature like "22°C", with a hand-drawn degree sign (the fonts are
+// ASCII only). The ring is sized from the font's digit height.
+struct DegreeRing {
+  int16_t up, radius;
+};
+DegreeRing degreeRing(Adafruit_GFX &g, const GFXfont *font) {
+  int16_t x1, y1;
+  uint16_t w, h;
+  g.setFont(font);
+  g.setTextSize(1);
+  g.getTextBounds("0", 0, 100, &x1, &y1, &w, &h);
+  int16_t radius = h >= 22 ? 4 : 3;
+  return {(int16_t)(h - radius), radius};
+}
+
+// Width it takes up.
+int16_t temperatureWidth(Adafruit_GFX &g, int value, const GFXfont *font) {
   char number[8];
   snprintf(number, sizeof(number), "%d", value);
+  DegreeRing ring = degreeRing(g, font);
   int16_t x1, cx1;
   uint16_t w, cw;
-  measure(g, &FreeSansBold12pt7b, number, x1, w);
-  measure(g, &FreeSansBold12pt7b, "C", cx1, cw);
-  return (x1 + (int16_t)w) + 9 + (cx1 + (int16_t)cw);
+  measure(g, font, number, x1, w);
+  measure(g, font, "C", cx1, cw);
+  return (x1 + (int16_t)w) + ring.radius * 2 + 4 + (cx1 + (int16_t)cw);
 }
 
 // Draws it with the ink starting at x; returns the x where it ends.
-int16_t drawTemperature(Adafruit_GFX &g, int16_t x, int16_t baseline, int value, uint16_t colour) {
+int16_t drawTemperature(Adafruit_GFX &g, int16_t x, int16_t baseline, int value, uint16_t colour,
+                        const GFXfont *font) {
   char number[8];
   snprintf(number, sizeof(number), "%d", value);
+  DegreeRing ring = degreeRing(g, font);
   int16_t x1;
   uint16_t w;
-  measure(g, &FreeSansBold12pt7b, number, x1, w);
+  measure(g, font, number, x1, w);
   int16_t numberEnd = x + x1 + (int16_t)w;
-  textAt(g, &FreeSansBold12pt7b, colour, x, baseline, number);
-  g.drawCircle(numberEnd + 4, baseline - 15, 2, colour);
-  g.drawCircle(numberEnd + 4, baseline - 15, 3, colour);
-  return textAt(g, &FreeSansBold12pt7b, colour, numberEnd + 9, baseline, "C");
+  textAt(g, font, colour, x, baseline, number);
+  int16_t cx = numberEnd + 1 + ring.radius, cy = baseline - ring.up;
+  g.drawCircle(cx, cy, ring.radius, colour);
+  g.drawCircle(cx, cy, ring.radius - 1, colour);
+  return textAt(g, font, colour, numberEnd + ring.radius * 2 + 4, baseline, "C");
 }
 
 // ---------------------------------------------------------------------------
 // Icons
 // ---------------------------------------------------------------------------
 
-void drawSun(Adafruit_GFX &g, int16_t cx, int16_t cy, int16_t r) {
+// Weather icons take a scale k: at 1.0 they are about 40 x 40 pixels.
+int16_t sc(float v, float k) { return (int16_t)lroundf(v * k); }
+
+void drawSun(Adafruit_GFX &g, int16_t cx, int16_t cy, int16_t r, float k = 1.0f) {
   for (int i = 0; i < 8; i++) {
     float a = i * (float)M_PI / 4.0f;
     float s = sinf(a), c = cosf(a);
-    thickLine(g, cx + s * (r + 4), cy - c * (r + 4), cx + s * (r + 9), cy - c * (r + 9), SUN_ORANGE);
+    thickLine(g, cx + s * (r + 4 * k), cy - c * (r + 4 * k), cx + s * (r + 9 * k),
+              cy - c * (r + 9 * k), SUN_ORANGE);
   }
   g.fillCircle(cx, cy, r, SUN_ORANGE);
   g.fillCircle(cx, cy, r - 2, SUN_YELLOW);
 }
 
-void drawMoon(Adafruit_GFX &g, int16_t cx, int16_t cy) {
-  g.fillCircle(cx, cy, 13, MOON_PALE);
-  g.fillCircle(cx + 7, cy - 5, 11, BLACK);
+void drawMoon(Adafruit_GFX &g, int16_t cx, int16_t cy, float k) {
+  g.fillCircle(cx, cy, sc(13, k), MOON_PALE);
+  g.fillCircle(cx + sc(7, k), cy - sc(5, k), sc(11, k), BLACK);
 }
 
-void drawCloud(Adafruit_GFX &g, int16_t cx, int16_t cy, uint16_t c) {
-  g.fillCircle(cx - 9, cy + 2, 7, c);
-  g.fillCircle(cx + 1, cy - 4, 10, c);
-  g.fillCircle(cx + 11, cy + 3, 6, c);
-  g.fillRoundRect(cx - 16, cy + 2, 33, 8, 4, c);
+void drawCloud(Adafruit_GFX &g, int16_t cx, int16_t cy, uint16_t c, float k) {
+  g.fillCircle(cx - sc(9, k), cy + sc(2, k), sc(7, k), c);
+  g.fillCircle(cx + sc(1, k), cy - sc(4, k), sc(10, k), c);
+  g.fillCircle(cx + sc(11, k), cy + sc(3, k), sc(6, k), c);
+  g.fillRoundRect(cx - sc(16, k), cy + sc(2, k), sc(33, k), sc(8, k), sc(4, k), c);
 }
 
-void drawWeatherIcon(Adafruit_GFX &g, WeatherIcon icon, int16_t cx, int16_t cy) {
+void drawWeatherIcon(Adafruit_GFX &g, WeatherIcon icon, int16_t cx, int16_t cy, float k) {
   switch (icon) {
     case ICON_SUN:
-      drawSun(g, cx, cy, 11);
+      drawSun(g, cx, cy, sc(11, k), k);
       break;
     case ICON_MOON:
-      drawMoon(g, cx, cy);
+      drawMoon(g, cx, cy, k);
       break;
     case ICON_PARTLY_DAY:
-      drawSun(g, cx - 6, cy - 7, 8);
-      drawCloud(g, cx + 3, cy + 6, CLOUD_GREY);
+      drawSun(g, cx - sc(6, k), cy - sc(7, k), sc(8, k), k);
+      drawCloud(g, cx + sc(3, k), cy + sc(6, k), CLOUD_GREY, k);
       break;
     case ICON_PARTLY_NIGHT:
-      g.fillCircle(cx - 6, cy - 7, 10, MOON_PALE);
-      g.fillCircle(cx - 1, cy - 11, 8, BLACK);
-      drawCloud(g, cx + 3, cy + 6, CLOUD_GREY);
+      g.fillCircle(cx - sc(6, k), cy - sc(7, k), sc(10, k), MOON_PALE);
+      g.fillCircle(cx - sc(1, k), cy - sc(11, k), sc(8, k), BLACK);
+      drawCloud(g, cx + sc(3, k), cy + sc(6, k), CLOUD_GREY, k);
       break;
     case ICON_CLOUD:
-      drawCloud(g, cx, cy, CLOUD_GREY);
+      drawCloud(g, cx, cy, CLOUD_GREY, k);
       break;
     case ICON_RAIN:
-      drawCloud(g, cx, cy - 6, CLOUD_GREY);
+      drawCloud(g, cx, cy - sc(6, k), CLOUD_GREY, k);
       for (int i = -1; i <= 1; i++) {
-        thickLine(g, cx + i * 9 + 2, cy + 8, cx + i * 9 - 2, cy + 16, RAIN_BLUE);
+        thickLine(g, cx + (i * 9 + 2) * k, cy + 8 * k, cx + (i * 9 - 2) * k, cy + 16 * k, RAIN_BLUE);
       }
       break;
     case ICON_STORM:
-      drawCloud(g, cx, cy - 6, CLOUD_GREY);
-      g.fillTriangle(cx + 2, cy + 4, cx - 6, cy + 13, cx + 1, cy + 13, SUN_YELLOW);
-      g.fillTriangle(cx - 1, cy + 12, cx + 5, cy + 12, cx - 4, cy + 20, SUN_YELLOW);
+      drawCloud(g, cx, cy - sc(6, k), CLOUD_GREY, k);
+      g.fillTriangle(cx + sc(2, k), cy + sc(4, k), cx - sc(6, k), cy + sc(13, k), cx + sc(1, k),
+                     cy + sc(13, k), SUN_YELLOW);
+      g.fillTriangle(cx - sc(1, k), cy + sc(12, k), cx + sc(5, k), cy + sc(12, k), cx - sc(4, k),
+                     cy + sc(20, k), SUN_YELLOW);
       break;
     case ICON_SNOW:
-      drawCloud(g, cx, cy - 6, CLOUD_GREY);
+      drawCloud(g, cx, cy - sc(6, k), CLOUD_GREY, k);
       for (int i = -1; i <= 1; i++) {
-        g.fillCircle(cx + i * 9, cy + 12 + (i == 0 ? 4 : 0), 2, WHITE);
+        g.fillCircle(cx + sc(i * 9, k), cy + sc(12 + (i == 0 ? 4 : 0), k), 2, WHITE);
       }
       break;
     case ICON_MIST:
       for (int i = 0; i < 4; i++) {
-        int16_t w = (i % 2) ? 26 : 34;
-        g.fillRoundRect(cx - w / 2, cy - 12 + i * 8, w, 3, 1, CLOUD_GREY);
+        int16_t w = sc((i % 2) ? 26 : 34, k);
+        g.fillRoundRect(cx - w / 2, cy + sc(-12 + i * 8, k), w, 3, 1, CLOUD_GREY);
       }
       break;
     default:
@@ -322,19 +346,6 @@ void drawHeader(Adafruit_GFX &g, const FaceData &d) {
   }
 }
 
-void drawWeather(Adafruit_GFX &g, const FaceData &d) {
-  if (!d.weatherValid) {
-    textRight(g, &FreeSans9pt7b, DIM, RIGHT, 112, "Weather");
-    textRight(g, &FreeSans9pt7b, DIM, RIGHT, 130, d.weatherMessage ? d.weatherMessage : "...");
-    return;
-  }
-  drawWeatherIcon(g, d.icon, WEATHER_ICON_X, WEATHER_ICON_Y);
-
-  drawTemperature(g, RIGHT + 1 - temperatureWidth(g, d.tempC), 112, d.tempC, WHITE);
-
-  textRight(g, &FreeSans9pt7b, GREY, RIGHT, 130, d.condition);
-}
-
 // Small text in the built-in 5x7 font; y is the top of the text.
 void smallText(Adafruit_GFX &g, uint16_t colour, int16_t x, int16_t y, const char *text) {
   g.setFont(nullptr);
@@ -348,130 +359,149 @@ void smallTextCentre(Adafruit_GFX &g, uint16_t colour, int16_t centre, int16_t y
   smallText(g, colour, centre - (int16_t)strlen(text) * 3, y, text);
 }
 
-// The big number on the left, with its unit after it if there's room.
+void drawWeather(Adafruit_GFX &g, const FaceData &d) {
+  if (!d.weatherValid) {
+    textCentre(g, &FreeSansBold12pt7b, DIM, WEATHER_ICON_X, WEATHER_ICON_Y + 8, "--");
+    smallTextCentre(g, DIM, WEATHER_ICON_X, TEMP_BASELINE - 10,
+                    d.weatherMessage ? d.weatherMessage : "...");
+    return;
+  }
+  drawWeatherIcon(g, d.icon, WEATHER_ICON_X, WEATHER_ICON_Y, WEATHER_ICON_SCALE);
+  drawTemperature(g, RIGHT + 1 - temperatureWidth(g, d.tempC, &FreeSansBold12pt7b), TEMP_BASELINE,
+                  d.tempC, WHITE, &FreeSansBold12pt7b);
+}
+
+// Header row: the page name next to its icon. Returns where the text ends.
+int16_t cardLabel(Adafruit_GFX &g, const char *label) {
+  return textAt(g, &FreeSans9pt7b, GREY, CARD_LABEL_X, CARD_LABEL_BASELINE, label);
+}
+
+// The big number in the body, with its unit after it if there's room.
 void cardValue(Adafruit_GFX &g, const char *value, const char *unit) {
-  int16_t end = textAt(g, &FreeSansBold12pt7b, WHITE, CARD_VALUE_X, CARD_VALUE_BASELINE, value);
+  int16_t end = textAt(g, &FreeSansBold18pt7b, WHITE, CARD_VALUE_X, CARD_VALUE_BASELINE, value);
   if (unit && end + 3 + (int16_t)strlen(unit) * 6 < CARD_DIVIDER_X - 2) {
     smallText(g, GREY, end + 3, CARD_VALUE_BASELINE - 7, unit);
   }
 }
 
-void cardLabel(Adafruit_GFX &g, const char *label, uint16_t colour = GREY) {
-  textAt(g, &FreeSans9pt7b, colour, CARD_X + 8, CARD_LABEL_BASELINE, label);
-}
-
 void drawWindPage(Adafruit_GFX &g, const FaceData &d) {
   drawWindIcon(g, CARD_X + 8, CARD_ICON_Y);
+  cardLabel(g, "Wind speed");
   char value[8] = "--";
   if (d.weatherValid) snprintf(value, sizeof(value), "%d", d.windKmh);
   cardValue(g, value, "km/h");
-  cardLabel(g, "Wind speed");
 
-  drawCompass(g, CARD_DIAL_X, CARD_Y + 34, 20, d.weatherValid ? d.windDeg : -1);
+  drawCompass(g, CARD_DIAL_X, CARD_BODY_Y + 24, 20, d.weatherValid ? d.windDeg : -1);
   const char *point = (d.weatherValid && d.windDeg >= 0) ? compassPoint(d.windDeg) : "--";
-  textCentre(g, &FreeSansBold9pt7b, WHITE, CARD_DIAL_X, CARD_Y + 76, point);
+  textCentre(g, &FreeSansBold9pt7b, WHITE, CARD_DIAL_X, CARD_BODY_Y + 64, point);
 }
 
 void drawPressurePage(Adafruit_GFX &g, const FaceData &d) {
   drawGaugeIcon(g, CARD_X + 8, CARD_ICON_Y);
+  int16_t end = cardLabel(g, "Pressure");
+  smallText(g, DIM, end + 4, CARD_LABEL_BASELINE - 7, "hPa");
   char value[8] = "--";
   if (d.weatherValid) snprintf(value, sizeof(value), "%d", d.pressureHpa);
-  cardValue(g, value, "hPa");
-  int16_t end = textAt(g, &FreeSans9pt7b, GREY, CARD_X + 8, CARD_LABEL_BASELINE, "Pressure");
-  if (d.weatherValid && d.pressureHpa >= 1000) {  // unit didn't fit after 4 digits
-    smallText(g, DIM, end + 4, CARD_LABEL_BASELINE - 7, "hPa");
-  }
+  cardValue(g, value, nullptr);
 
   // Half-circle dial from 980 hPa (left) to 1040 hPa (right).
-  const int16_t cx = CARD_DIAL_X, cy = CARD_Y + 44, r = 19;
+  const int16_t cx = CARD_DIAL_X, cy = CARD_BODY_Y + 40, r = 22;
   g.drawCircleHelper(cx, cy, r, 0x1 | 0x2, DIM);
   for (int i = 0; i <= 4; i++) {
     float a = (float)M_PI * (1.0f - i / 4.0f);  // left to right over the top
-    g.drawLine(cx + cosf(a) * (r - 3), cy - sinf(a) * (r - 3), cx + cosf(a) * r,
+    g.drawLine(cx + cosf(a) * (r - 4), cy - sinf(a) * (r - 4), cx + cosf(a) * r,
                cy - sinf(a) * r, GREY);
   }
   if (!d.weatherValid) return;
   float t = (d.pressureHpa - 980) / 60.0f;
   t = t < 0 ? 0 : (t > 1 ? 1 : t);
   float a = (float)M_PI * (1.0f - t);
-  thickLine(g, cx, cy, cx + cosf(a) * (r - 4), cy - sinf(a) * (r - 4), WHITE);
+  thickLine(g, cx, cy, cx + cosf(a) * (r - 5), cy - sinf(a) * (r - 5), WHITE);
   g.fillCircle(cx, cy, 2, WHITE);
   const char *level = d.pressureHpa < 1006 ? "LOW" : d.pressureHpa > 1020 ? "HIGH" : "NORMAL";
-  smallTextCentre(g, WHITE, cx, CARD_Y + 54, level);
+  smallTextCentre(g, WHITE, cx, cy + 8, level);
 }
 
-void drawUvPage(Adafruit_GFX &g, const FaceData &d) {
-  drawSun(g, CARD_X + 22, CARD_ICON_Y + 10, 5);
-  int band = 0;
-  char value[8] = "--";
-  if (d.weatherValid) {
-    int uv = lroundf(d.uvIndex);
-    snprintf(value, sizeof(value), "%d", uv);
-    band = uv <= 2 ? 0 : uv <= 5 ? 1 : uv <= 7 ? 2 : uv <= 10 ? 3 : 4;
+// Weather condition: the whole body is the text, on two lines if needed.
+void drawConditionPage(Adafruit_GFX &g, const FaceData &d) {
+  drawCloud(g, CARD_X + 22, CARD_ICON_Y + 10, ACCENT_BLUE, 0.6f);
+  cardLabel(g, "Weather");
+  const char *text = d.weatherValid ? d.condition : "--";
+  const int16_t maxWidth = CARD_W - 14;  // to 4px inside the right edge
+  int16_t x1;
+  uint16_t w;
+  measure(g, &FreeSansBold18pt7b, text, x1, w);
+  if (x1 + (int16_t)w <= maxWidth) {
+    textAt(g, &FreeSansBold18pt7b, WHITE, CARD_VALUE_X, CARD_VALUE_BASELINE, text);
+    return;
   }
-  cardValue(g, value, "UV");
-  if (d.weatherValid) {
-    cardLabel(g, UV_LEVELS[band], UV_COLOURS[band]);
+  // Split at the first space: "Partly cloudy" -> "Partly" / "cloudy".
+  char first[16];
+  snprintf(first, sizeof(first), "%s", text);
+  char *space = strchr(first, ' ');
+  const GFXfont *font = &FreeSansBold18pt7b;
+  if (space) {
+    *space = '\0';
+    const char *second = space + 1;
+    uint16_t w2;
+    measure(g, font, first, x1, w);
+    int16_t w1 = x1 + (int16_t)w;
+    measure(g, font, second, x1, w2);
+    if (w1 > maxWidth || x1 + (int16_t)w2 > maxWidth) font = &FreeSansBold12pt7b;
+    textAt(g, font, WHITE, CARD_VALUE_X, CARD_BODY_Y + 22, first);
+    textAt(g, font, WHITE, CARD_VALUE_X, CARD_BODY_Y + 54, second);
   } else {
-    cardLabel(g, "UV index");
-  }
-
-  // Five-band colour scale, low at the bottom, with a marker on the current band.
-  const int16_t barX = CARD_DIAL_X - 2, barTop = CARD_Y + 12, segment = 12;
-  for (int i = 0; i < 5; i++) {
-    int16_t y = barTop + (4 - i) * segment;
-    g.fillRect(barX, y, 10, segment - 2, UV_COLOURS[i]);
-  }
-  if (d.weatherValid) {
-    int16_t y = barTop + (4 - band) * segment + (segment - 2) / 2;
-    g.fillTriangle(barX - 8, y - 4, barX - 8, y + 4, barX - 2, y, WHITE);
+    textAt(g, &FreeSansBold12pt7b, WHITE, CARD_VALUE_X, CARD_VALUE_BASELINE, text);
   }
 }
 
 void drawFeelsLikePage(Adafruit_GFX &g, const FaceData &d) {
-  drawThermometer(g, CARD_X + 14, CARD_ICON_Y - 4);
+  drawThermometer(g, CARD_X + 14, CARD_ICON_Y - 2);
+  cardLabel(g, "Feels like");
   if (d.weatherValid) {
-    drawTemperature(g, CARD_VALUE_X, CARD_VALUE_BASELINE, d.feelsLikeC, WHITE);
+    drawTemperature(g, CARD_VALUE_X, CARD_VALUE_BASELINE, d.feelsLikeC, WHITE, &FreeSansBold18pt7b);
   } else {
     cardValue(g, "--", nullptr);
   }
-  cardLabel(g, "Feels like");
 
   // How it compares with the actual temperature.
   if (!d.weatherValid) return;
-  const int16_t cx = CARD_DIAL_X, cy = CARD_Y + 24;
+  const int16_t cx = CARD_DIAL_X, cy = CARD_BODY_Y + 12;
   int diff = d.feelsLikeC - d.tempC;
   char text[8];
   if (diff == 0) {
-    g.fillRect(cx - 7, cy - 4, 14, 3, GREY);
-    g.fillRect(cx - 7, cy + 2, 14, 3, GREY);
-    smallTextCentre(g, GREY, cx, CARD_Y + 44, "same");
+    g.fillRect(cx - 8, cy - 4, 16, 3, GREY);
+    g.fillRect(cx - 8, cy + 2, 16, 3, GREY);
+    smallTextCentre(g, GREY, cx, cy + 24, "same");
   } else {
     uint16_t colour = diff > 0 ? WARM_ORANGE : COOL_BLUE;
     if (diff > 0) {
-      g.fillTriangle(cx, cy - 8, cx - 8, cy + 4, cx + 8, cy + 4, colour);
+      g.fillTriangle(cx, cy - 9, cx - 9, cy + 5, cx + 9, cy + 5, colour);
     } else {
-      g.fillTriangle(cx, cy + 6, cx - 8, cy - 6, cx + 8, cy - 6, colour);
+      g.fillTriangle(cx, cy + 7, cx - 9, cy - 7, cx + 9, cy - 7, colour);
     }
     snprintf(text, sizeof(text), "%+d", diff);
     int16_t x1;
     uint16_t w;
-    measure(g, &FreeSansBold9pt7b, text, x1, w);
-    int16_t x = cx - (x1 + (int16_t)w + 6) / 2;
-    int16_t end = textAt(g, &FreeSansBold9pt7b, colour, x, CARD_Y + 52, text);
-    g.drawCircle(end + 3, CARD_Y + 42, 2, colour);
-    smallTextCentre(g, GREY, cx, CARD_Y + 62, diff > 0 ? "warmer" : "cooler");
+    measure(g, &FreeSansBold12pt7b, text, x1, w);
+    int16_t x = cx - (x1 + (int16_t)w + 8) / 2;
+    int16_t end = textAt(g, &FreeSansBold12pt7b, colour, x, cy + 38, text);
+    g.drawCircle(end + 4, cy + 23, 2, colour);
+    g.drawCircle(end + 4, cy + 23, 3, colour);
+    smallTextCentre(g, GREY, cx, cy + 46, diff > 0 ? "warmer" : "cooler");
   }
 }
 
 void drawCard(Adafruit_GFX &g, const FaceData &d) {
   g.fillRoundRect(CARD_X, CARD_Y, CARD_W, CARD_H, 9, CARD_FILL);
   g.drawRoundRect(CARD_X, CARD_Y, CARD_W, CARD_H, 9, CARD_EDGE);
-  g.drawFastVLine(CARD_DIVIDER_X, CARD_Y + 10, CARD_H - 20, CARD_EDGE);
+  if (d.cardPage != CARD_CONDITION) {  // the condition page uses the full width
+    g.drawFastVLine(CARD_DIVIDER_X, CARD_BODY_Y, CARD_Y + CARD_H - 12 - CARD_BODY_Y, CARD_EDGE);
+  }
 
   switch (d.cardPage) {
     case CARD_PRESSURE: drawPressurePage(g, d); break;
-    case CARD_UV: drawUvPage(g, d); break;
+    case CARD_CONDITION: drawConditionPage(g, d); break;
     case CARD_FEELS_LIKE: drawFeelsLikePage(g, d); break;
     default: drawWindPage(g, d); break;
   }

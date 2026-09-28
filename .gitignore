@@ -1,0 +1,11 @@
+# Build output from PlatformIO
+.pio/
+.vscode/
+
+# Personal WiFi and passwords: never push this file
+include/secrets.h
+
+# Python / editor clutter
+__pycache__/
+*.pyc
+.DS_Store

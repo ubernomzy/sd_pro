@@ -4,7 +4,7 @@ Custom firmware for the SD Pro WiFi weather clock (ESP8266, 4MB flash,
 1.54" 240x240 ST7789 LCD). Forked from JUZIPi-tech/SD_PRO, which only
 publishes compiled firmware. The seller's files are kept in `original/`.
 
-## Current version: 0.8.1 (bigger date)
+## Current version: 0.9.0 (city on top, bigger card)
 
 Progress so far:
 
@@ -53,13 +53,17 @@ Progress so far:
   almost no memory. Firmware is about 458KB
 - v0.8.1: "Hello" is gone; the name is smaller (12pt instead of 18pt)
   and the day and date are bigger (12pt instead of 9pt)
+- v0.9.0: the name is gone and the city (with its pin) takes its place at
+  the top. The bottom card moves up into the freed space (now 162 x 92,
+  was 148 x 80) with a bigger compass, pressure dial and UV scale, and
+  the spaceman shrinks to 64 x 64 (set by `SIZE` in
+  `tools/make_spaceman.py`)
 
 ## Personalise it
 
 The top of `src/main.cpp` has a settings block:
 
 ```cpp
-static const char *FACE_NAME = "Neehal";
 static const char *FACE_CITY = "Sydney";
 static const char *WEATHER_LATITUDE = "-33.8688";
 static const char *WEATHER_LONGITUDE = "151.2093";
@@ -70,7 +74,7 @@ static const char *TIMEZONE = "AEST-10AEDT,M10.1.0,M4.1.0/3";
 The layout itself is in `src/face.cpp` (positions, colours, fonts, icons).
 
 To swap the animation: replace `assets/spaceman.gif` with another GIF of
-at most 80x80 pixels (square), run `python3 tools/make_spaceman.py`, and
+any square size (it is scaled to `SIZE`), run `python3 tools/make_spaceman.py`, and
 rebuild. Colour is dropped (16 greys), and keep an eye on the size check.
 
 ## Features
@@ -115,7 +119,7 @@ in `src/main.cpp`; the status page can switch back to the generic table.
    `secrets.h` is in `.gitignore` and must never be committed. (Weather
    needs no key.)
 2. Build: `pio run -e sdpro`
-3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 456KB).
+3. The firmware file is `.pio/build/sdpro/firmware.bin` (about 449KB).
    The build fails on purpose if it goes over 500KB (`check_size.py`).
 
 ## Flash

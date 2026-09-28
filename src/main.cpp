@@ -29,6 +29,8 @@
 //         bottom card. Converted on the PC by tools/make_spaceman.py into
 //         spaceman_data.h (26KB), so the clock needs no GIF decoder.
 // v0.8.1: "Hello" removed; the name is smaller and the day and date bigger.
+// v0.9.0: the city replaces the name at the top; the bottom card moves up
+//         and widens into the space that frees, and the spaceman is 64x64.
 //
 // Size rule: an update is written beside the running firmware, so each
 // version must stay under ~500KB (about half the 1MB firmware area). The
@@ -69,7 +71,6 @@
 // Clock face settings: change these to personalise the clock
 // ---------------------------------------------------------------------------
 
-static const char *FACE_NAME = "Neehal";
 static const char *FACE_CITY = "Sydney";
 
 // Where the weather is for (decimal degrees). Sydney CBD; find others at
@@ -273,8 +274,7 @@ void drawTestScreen() {
   tft->setTextColor(ST77XX_WHITE);
   tft->setTextSize(3);
   tft->setCursor(12, 70);
-  tft->print("Hello ");
-  tft->print(FACE_NAME);
+  tft->print("SD Pro");
 
   tft->setTextSize(2);
   tft->setTextColor(ST77XX_YELLOW);
@@ -792,7 +792,6 @@ void setup() {
   startWebServer();
   configTime(TIMEZONE, "pool.ntp.org", "time.google.com");
 
-  face.name = FACE_NAME;
   face.city = FACE_CITY;
   face.weatherMessage = "loading...";
   face.windDeg = -1;

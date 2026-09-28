@@ -1,6 +1,7 @@
 """Turns assets/spaceman.gif into src/spaceman_data.h for the firmware.
 
-The seller's spaceman is an 80x80, 20-frame animation, white on black.
+The seller's spaceman is an 80x80, 20-frame animation, white on black;
+it is shrunk to SIZE x SIZE here.
 Stored as a GIF it would need a decoder and ~22KB of the clock's memory,
 so instead every frame is converted here, on the PC, into 16 shades of
 grey and run-length encoded: each byte is (shade << 4) | (run length - 1),
@@ -17,6 +18,7 @@ from PIL import Image
 SOURCE = Path("assets/spaceman.gif")
 OUTPUT = Path("src/spaceman_data.h")
 SHADES = 16
+SIZE = 64  # drawn size on the clock, in pixels (the GIF is 80x80)
 
 
 def encode(pixels):
@@ -33,13 +35,14 @@ def encode(pixels):
 
 def main():
     gif = Image.open(SOURCE)
-    width, height = gif.size
+    width = height = SIZE
     data, offsets, durations = [], [], []
     for n in range(gif.n_frames):
         gif.seek(n)
         durations.append(gif.info.get("duration", 100))
         offsets.append(len(data))
-        data += encode(gif.convert("L").tobytes())
+        frame = gif.convert("L").resize((SIZE, SIZE), Image.LANCZOS)
+        data += encode(frame.tobytes())
     assert len(data) < 65536, "offsets are 16-bit"
     frame_ms = max(10, round(sum(durations) / len(durations)))
 

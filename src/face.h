@@ -33,7 +33,6 @@ enum CardPage : uint8_t {
 
 struct FaceData {
   // Fixed text (set in main.cpp)
-  const char *name;       // "Neehal"
   const char *city;       // "Sydney"
 
   // Time (from the internet)
@@ -70,8 +69,8 @@ void drawFaceCard(Adafruit_GFX &gfx, const FaceData &d);
 
 // ----- Spaceman animation (the seller's /0.gif), right of the bottom card -----
 
-constexpr int16_t SPACEMAN_X = 156;  // centred in the gap right of the card
-constexpr int16_t SPACEMAN_Y = 150;  // level with the card
+constexpr int16_t SPACEMAN_X = 171;  // in the gap right of the card
+constexpr int16_t SPACEMAN_Y = 152;  // centred on the card's height
 
 uint8_t spacemanFrameCount();
 uint16_t spacemanFrameMs();          // how long each frame shows, from the GIF

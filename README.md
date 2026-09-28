@@ -52,6 +52,10 @@ Display pins, from the seller's firmware:
 | SPI mode  | 3    | Confirmed on the clock (mode 0 stays blank)|
 | Rotation  | 2    | Panel is mounted upside down               |
 
+Checked on the clock with v0.4.x: image upright, colour order correct
+(red, green, blue), no offset. The case covers the bottom pixel or two,
+so keep content a few pixels clear of the bottom edge.
+
 Display chip: ST7789, 240x240. The seller's startup table (file offset
 `0x6a308`, identical in v1.0.4 and v1.0.6) is copied into `SELLER_INIT`
 in `src/main.cpp`; the status page can switch back to the generic table.

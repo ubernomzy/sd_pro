@@ -356,7 +356,7 @@ void drawWindCard(Adafruit_GFX &g, const FaceData &d) {
   textCentre(g, &FreeSansBold9pt7b, WHITE, compassX, CARD_Y + 68, point);
 }
 
-void drawComfortCard(Adafruit_GFX &g, const FaceData &d) {
+[[maybe_unused]] void drawComfortCard(Adafruit_GFX &g, const FaceData &d) {
   // Green when pleasant, amber otherwise, neutral blue-grey with no data.
   uint16_t fill = CARD_BLUE_FILL, edge = CARD_BLUE_EDGE, leaf = DIM, vein = BLACK;
   if (d.weatherValid && d.comfortGood) {
@@ -408,7 +408,8 @@ void drawFace(Adafruit_GFX &gfx, const FaceData &d) {
   drawLocation(gfx, d);
   drawWeather(gfx, d);
   drawWindCard(gfx, d);
-  drawComfortCard(gfx, d);
+  // Comfort card removed at Neehal's request; its space (x 156-236, y 150-230)
+  // is free for the next element. drawComfortCard() is kept for reference.
 }
 
 void describeComfort(int tempC, int humidity, char *label, size_t labelSize, bool &good) {

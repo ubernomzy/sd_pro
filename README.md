@@ -4,7 +4,7 @@ Custom firmware for the SD Pro WiFi weather clock (ESP8266, 4MB flash,
 1.54" 240x240 ST7789 LCD). Forked from JUZIPi-tech/SD_PRO, which only
 publishes compiled firmware. The seller's files are kept in `original/`.
 
-## Current version: 0.10.1 (smaller city)
+## Current version: 0.10.2 (name under the spaceman)
 
 Progress so far:
 
@@ -66,6 +66,8 @@ Progress so far:
   UV is no longer fetched
 - v0.10.1: the city name is smaller (bold 9pt instead of 12pt), with a
   smaller pin, so it doesn't crowd the date
+- v0.10.2: "Neehal" is back, in the small built-in font (same as "hPa"),
+  centred under the spaceman
 
 ## Personalise it
 
@@ -73,6 +75,7 @@ The top of `src/main.cpp` has a settings block:
 
 ```cpp
 static const char *FACE_CITY = "Sydney";
+static const char *FACE_NAME = "Neehal";
 static const char *WEATHER_LATITUDE = "-33.8688";
 static const char *WEATHER_LONGITUDE = "151.2093";
 static const uint32_t CARD_PAGE_MS = 5000;

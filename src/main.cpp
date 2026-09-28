@@ -35,6 +35,7 @@
 //          condition leaves the top-right; smaller weather icon; the card
 //          grows up to just below the time.
 // v0.10.1: smaller city name and pin, so they don't crowd the date.
+// v0.10.2: the name is back, in small text under the spaceman.
 //
 // Size rule: an update is written beside the running firmware, so each
 // version must stay under ~500KB (about half the 1MB firmware area). The
@@ -76,6 +77,7 @@
 // ---------------------------------------------------------------------------
 
 static const char *FACE_CITY = "Sydney";
+static const char *FACE_NAME = "Neehal";  // small, under the spaceman
 
 // Where the weather is for (decimal degrees). Sydney CBD; find others at
 // https://www.latlong.net
@@ -796,6 +798,7 @@ void setup() {
   configTime(TIMEZONE, "pool.ntp.org", "time.google.com");
 
   face.city = FACE_CITY;
+  face.name = FACE_NAME;
   face.weatherMessage = "loading...";
   face.windDeg = -1;
   nextWeatherAt = millis() + 3000;  // give the time sync a moment first

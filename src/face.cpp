@@ -549,6 +549,10 @@ void drawFace(Adafruit_GFX &gfx, const FaceData &d) {
   drawFaceTime(gfx, d);
   drawWeather(gfx, d);
   drawCard(gfx, d);
+  if (d.name) {  // under the spaceman, in the small built-in font
+    smallTextCentre(gfx, ACCENT_BLUE, SPACEMAN_X + spacemanSize() / 2,
+                    SPACEMAN_Y + spacemanSize() + 4, d.name);
+  }
 }
 
 void drawFaceCard(Adafruit_GFX &gfx, const FaceData &d) {
